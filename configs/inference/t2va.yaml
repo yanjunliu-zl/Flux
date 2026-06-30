@@ -1,0 +1,37 @@
+# Text-to-Video-Audio Inference Configuration
+
+inference:
+  type: "t2va"
+
+  # Checkpoint
+  checkpoint_path: "checkpoints/stage3_av_joint/step_300000"
+
+  # Generation parameters
+  num_frames: 32
+  width: 256
+  height: 256
+  fps: 16
+  audio_duration_s: 2.0  # Matches num_frames / fps
+
+  # Diffusion sampling
+  num_steps: 30
+  sampler: "heun"  # "euler" or "heun"
+  cfg_video: 5.0
+  cfg_audio: 4.0
+  seed: 42
+
+  # Text
+  prompt: "A dog running through a grassy field on a sunny day"
+  negative_prompt: "low quality, blurry, distorted, watermark, text"
+
+  # Output
+  output_path: "outputs/t2va_output.mp4"
+
+  # Optimizations
+  use_torch_compile: false
+  vae_tiling: false
+
+  # Model config overrides (optional)
+  model:
+    dim: 768
+    num_layers: 12

@@ -1,0 +1,98 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seedance"
+version = "2.0.0"
+description = "Seedance 2.0: Dual-Branch Diffusion Transformer for Native Audio-Video Joint Generation"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Seedance Contributors"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# Core dependencies (uv will resolve from here)
+dependencies = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "torchaudio==2.8.0",
+    "transformers>=4.45.0",
+    "diffusers>=0.31.0",
+    "accelerate>=1.0.0",
+    "einops>=0.8.0",
+    "omegaconf>=2.3.0",
+    "safetensors>=0.4.0",
+    "timm>=1.0.0",
+    "lpips>=0.1.4",
+    "librosa>=0.10.0",
+    "soundfile>=0.12.0",
+    "scipy>=1.12.0",
+    "opencv-python>=4.9.0",
+    "imageio>=2.34.0",
+    "imageio-ffmpeg>=0.5.0",
+    "numpy>=1.26.0",
+    "pillow>=10.0.0",
+    "tqdm>=4.66.0",
+    "wandb>=0.17.0",
+    "gradio>=4.0.0",
+]
+
+[project.scripts]
+seedance-train = "scripts.train:main"
+seedance-infer-t2va = "scripts.inference_t2va:main"
+seedance-infer-i2va = "scripts.inference_i2va:main"
+
+[tool.setuptools.packages.find]
+include = ["seedance*"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "black>=24.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+flash-attn = ["flash-attn>=2.6.0"]
+tools = [
+    "yt-dlp>=2024.0",
+    "scenedetect>=0.6.0",
+]
+t5 = [
+    "sentencepiece>=0.2.0",
+    "protobuf>=4.25.0",
+]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "black>=24.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+lint.select = ["E", "F", "I", "N", "W"]
+lint.ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

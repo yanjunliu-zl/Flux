@@ -1,0 +1,40 @@
+# DB-DiT Small Configuration (~500M params)
+# Trainable on a single 24GB GPU with gradient checkpointing
+
+model:
+  _target_: seedance.models.DBDiT
+
+  # Shared
+  dim: 768
+  num_layers: 12
+  num_heads: 12
+  ffn_ratio: 4.0
+  qk_norm: true
+  dropout: 0.0
+
+  # Cross-Modal Bridge (CBGA)
+  cbga_layers: [4, 8]  # Apply CBGA at these layer indices (0-indexed)
+  cbga_gate_warmup_steps: 50000  # Linearly increase gates from 0 to learned value
+
+  # Vision Branch
+  video:
+    patch_size: [1, 2, 2]  # (T, H, W) — no temporal patching, 2x2 spatial
+    latent_channels: 16
+    rope_theta: 10000
+    # MM-RoPE dimension split
+    rope_dim_t: 256   # dims for temporal axis
+    rope_dim_h: 256   # dims for height axis
+    rope_dim_w: 256   # dims for width axis
+
+  # Audio Branch
+  audio:
+    patch_size: [1, 4]  # (Freq, Time) — no freq patching, 4x time compression
+    latent_channels: 8
+    rope_theta: 10000
+
+  # Text Encoder
+  text:
+    encoder: "google/t5-v1_1-base"
+    dim_t5: 768
+    max_length: 128
+    pooled: false  # Use last_hidden_state, not pooled output

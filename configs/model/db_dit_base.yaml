@@ -1,0 +1,39 @@
+# DB-DiT Base Configuration (~1.3B params)
+# Requires ~4-8 GPUs for training at 256x256
+
+model:
+  _target_: seedance.models.DBDiT
+
+  # Shared
+  dim: 1024
+  num_layers: 24
+  num_heads: 16
+  ffn_ratio: 4.0
+  qk_norm: true
+  dropout: 0.0
+
+  # Cross-Modal Bridge (CBGA)
+  cbga_layers: [6, 12, 18]
+  cbga_gate_warmup_steps: 50000
+
+  # Vision Branch
+  video:
+    patch_size: [1, 2, 2]
+    latent_channels: 16
+    rope_theta: 10000
+    rope_dim_t: 341
+    rope_dim_h: 341
+    rope_dim_w: 342
+
+  # Audio Branch
+  audio:
+    patch_size: [1, 4]
+    latent_channels: 8
+    rope_theta: 10000
+
+  # Text Encoder
+  text:
+    encoder: "google/t5-v1_1-xxl"
+    dim_t5: 4096
+    max_length: 226
+    pooled: false

@@ -1,0 +1,51 @@
+# VideoVAE Configuration
+# 3D Autoencoder with CausalConv3D for video compression
+# 8x spatial + 4x temporal compression = 256x total
+
+model:
+  _target_: seedance.models.VideoVAE
+
+  # Input/Output
+  in_channels: 3
+  out_channels: 3
+  latent_channels: 16
+
+  # Channel progression (encoder doubles, decoder halves)
+  base_channels: 128
+  channel_multipliers: [1, 2, 4, 4]  # 128 -> 256 -> 512 -> 512
+
+  # Spatial compression per stage (cumulative must be 8x)
+  spatial_strides: [1, 2, 2, 2]  # per stage
+  # Temporal compression per stage (cumulative must be 4x)
+  temporal_strides: [2, 2, 1, 1]  # per stage
+
+  # Number of ResBlocks per stage
+  num_res_blocks: 2
+
+  # Attention at middle resolution
+  attn_resolutions: [16]  # Apply attention when spatial res <= 16
+
+  # CausalConv3D kernel sizes
+  kernel_size: 3
+
+  # GroupNorm groups
+  norm_num_groups: 32
+
+  # KL regularization
+  kl_weight: 1.0e-6
+
+  # Discriminator
+  discriminator:
+    ndf: 64
+    num_layers: 4
+    use_spectral_norm: true
+
+  # Loss weights
+  loss:
+    l1_weight: 1.0
+    lpips_weight: 1.0
+    kl_weight: 1.0e-6
+    gan_weight: 0.5
+
+  # Pretrained initialization
+  pretrained_sdxl_vae: null  # Path to SDXL VAE checkpoint, or null to train from scratch

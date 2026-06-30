@@ -1,0 +1,63 @@
+# Stage 4: High-Resolution Fine-Tuning
+# Scale to 512x512 at 64 frames
+
+training:
+  stage: 4
+  description: "High-resolution fine-tuning at 512x512"
+
+  data:
+    _target_: seedance.data.AVDataset
+    manifest_path: "data/manifests/av_hires_train.csv"
+    video:
+      resolution: 512
+      num_frames: 64
+      frame_stride: 1
+    audio:
+      sample_rate: 16000
+      n_mels: 80
+      hop_length: 256
+    caption_dropout_prob: 0.1
+
+  model_init:
+    full_model: "from_stage3_checkpoint"
+    video_vae: "frozen"
+    audio_vae: "frozen"
+
+  optimizer:
+    type: "adamw"
+    lr: 2.0e-5
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+    eps: 1.0e-8
+
+  scheduler:
+    type: "cosine"
+    warmup_steps: 2000
+    min_lr: 5.0e-7
+
+  max_steps: 100000
+  batch_size: 1
+  gradient_accumulation_steps: 8
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+
+  ema:
+    decay: 0.9999
+    update_every: 1
+
+  loss:
+    type: "flow_matching_joint"
+    video_weight: 1.0
+    audio_weight: 1.0
+    sync_weight: 0.05
+
+  logging:
+    log_every: 50
+    sample_every: 2000
+    checkpoint_every: 5000
+    keep_last_n_checkpoints: 3
+    wandb: true
+
+  distributed:
+    backend: "nccl"
+    fsdp_sharding_strategy: "FULL_SHARD"

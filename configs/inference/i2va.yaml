@@ -1,0 +1,38 @@
+# Image-to-Video-Audio Inference Configuration
+
+inference:
+  type: "i2va"
+
+  checkpoint_path: "checkpoints/stage3_av_joint/step_300000"
+
+  # Input image
+  image_path: "inputs/reference.jpg"
+
+  # Generation parameters
+  num_frames: 32
+  width: 256
+  height: 256
+  fps: 16
+  audio_duration_s: 2.0
+
+  # Diffusion sampling
+  num_steps: 30
+  sampler: "heun"
+  cfg_video: 5.0
+  cfg_audio: 4.0
+  seed: 42
+
+  # Text
+  prompt: "The person in the image turns their head and smiles"
+  negative_prompt: "low quality, blurry, distorted, static, no motion"
+
+  # Output
+  output_path: "outputs/i2va_output.mp4"
+
+  # Optimizations
+  use_torch_compile: false
+  vae_tiling: false
+
+  model:
+    dim: 768
+    num_layers: 12

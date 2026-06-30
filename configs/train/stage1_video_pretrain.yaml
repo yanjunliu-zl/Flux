@@ -1,0 +1,76 @@
+# Stage 1: Video Pretraining
+# Train vision branch on large-scale video dataset
+
+training:
+  stage: 1
+  description: "Video-only pretraining on large-scale dataset"
+
+  # Data
+  data:
+    _target_: seedance.data.VideoDataset
+    manifest_path: "data/manifests/train.csv"
+    resolution: 256
+    num_frames: 32
+    frame_stride: 1
+    fps_condition: true
+    caption_dropout_prob: 0.1  # For CFG
+
+  # Bucketing
+  bucket:
+    enabled: true
+    buckets:
+      - [256, 16, "1:1"]
+      - [256, 32, "1:1"]
+      - [256, 16, "16:9"]
+      - [256, 32, "16:9"]
+
+  # Model initialization
+  model_init:
+    vision_branch: "pixart"  # Initialize from PixArt-alpha weights
+    temporal_layers: "zero"  # Zero-init temporal attention projections
+    audio_branch: "frozen"   # Audio branch frozen in stage 1
+    video_vae: "pretrained"  # Use pretrained VideoVAE
+
+  # Optimization
+  optimizer:
+    type: "adamw"
+    lr: 2.0e-4
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+    eps: 1.0e-8
+
+  scheduler:
+    type: "cosine"
+    warmup_steps: 5000
+    min_lr: 1.0e-5
+
+  # Training loop
+  max_steps: 500000
+  batch_size: 4  # Per GPU
+  gradient_accumulation_steps: 4  # Effective batch = 4 * 4 * 8 = 128
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+
+  # EMA
+  ema:
+    decay: 0.9999
+    update_every: 1
+
+  # Loss
+  loss:
+    type: "flow_matching"
+    logit_normal_mean: 0.0
+    logit_normal_std: 1.0
+
+  # Logging
+  logging:
+    log_every: 100
+    sample_every: 5000
+    checkpoint_every: 10000
+    keep_last_n_checkpoints: 5
+    wandb: false
+
+  # Distributed
+  distributed:
+    backend: "nccl"
+    fsdp_sharding_strategy: "FULL_SHARD"

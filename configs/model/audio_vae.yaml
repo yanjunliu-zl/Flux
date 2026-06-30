@@ -1,0 +1,41 @@
+# AudioVAE Configuration
+# 2D Conv Autoencoder for mel-spectrogram compression
+
+model:
+  _target_: seedance.models.AudioVAE
+
+  # Mel-spectrogram parameters
+  sample_rate: 16000
+  n_mels: 80
+  hop_length: 256
+  win_length: 1024
+  n_fft: 1024
+
+  # VAE parameters
+  in_channels: 1
+  latent_channels: 8
+  base_channels: 64
+  channel_multipliers: [1, 2, 4, 4]
+  # Strides in (freq, time) format
+  strides: [[1, 2], [2, 2], [2, 1], [2, 1]]
+  num_res_blocks: 2
+  attn_resolutions: []
+
+  # KL regularization
+  kl_weight: 1.0e-6
+
+  # Discriminator
+  discriminator:
+    ndf: 32
+    num_layers: 4
+    use_spectral_norm: true
+
+  # Loss weights
+  loss:
+    l1_weight: 1.0
+    lpips_weight: 0.5
+    kl_weight: 1.0e-6
+    gan_weight: 0.3
+
+  # Pretrained initialization
+  pretrained_audioldm_vae: null

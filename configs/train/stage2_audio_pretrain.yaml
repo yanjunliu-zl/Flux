@@ -1,0 +1,59 @@
+# Stage 2: Audio Pretraining
+# Train audio branch on audio dataset (mel-spectrograms)
+
+training:
+  stage: 2
+  description: "Audio-only pretraining on mel-spectrogram dataset"
+
+  data:
+    _target_: seedance.data.AudioDataset
+    manifest_path: "data/manifests/audio_train.csv"
+    sample_rate: 16000
+    n_mels: 80
+    hop_length: 256
+    max_duration_s: 10.0
+    caption_dropout_prob: 0.1
+
+  model_init:
+    vision_branch: "frozen"
+    audio_branch: "from_vision"  # Initialize from vision branch weights
+    video_vae: "frozen"
+    audio_vae: "pretrained"
+
+  optimizer:
+    type: "adamw"
+    lr: 1.0e-4
+    betas: [0.9, 0.999]
+    weight_decay: 0.01
+    eps: 1.0e-8
+
+  scheduler:
+    type: "cosine"
+    warmup_steps: 2000
+    min_lr: 5.0e-6
+
+  max_steps: 200000
+  batch_size: 8
+  gradient_accumulation_steps: 4
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+
+  ema:
+    decay: 0.9999
+    update_every: 1
+
+  loss:
+    type: "flow_matching"
+    logit_normal_mean: 0.0
+    logit_normal_std: 1.0
+
+  logging:
+    log_every: 100
+    sample_every: 5000
+    checkpoint_every: 10000
+    keep_last_n_checkpoints: 5
+    wandb: true
+
+  distributed:
+    backend: "nccl"
+    fsdp_sharding_strategy: "FULL_SHARD"
