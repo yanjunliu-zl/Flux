@@ -30,6 +30,8 @@ class DBDiT(nn.Module):
         dropout: Dropout rate.
         cbga_layers: Layer indices (0-indexed) where CBGA is applied.
         cbga_gate_warmup_steps: Steps to linearly warm up CBGA gates.
+        lip_sync_layers: Layer indices where LipSyncBridge is applied.
+            Default: same as cbga_layers. Empty list to disable.
         video_patch_size: Video patch size (T, H, W).
         video_latent_channels: VideoVAE latent channels (16).
         video_rope_theta: MM-RoPE theta for video.
@@ -46,11 +48,13 @@ class DBDiT(nn.Module):
         dim: int = 768,
         num_layers: int = 12,
         num_heads: int = 12,
+        context_dim: int | None = None,
         ffn_ratio: float = 4.0,
         qk_norm: bool = True,
         dropout: float = 0.0,
         cbga_layers: list[int] | None = None,
         cbga_gate_warmup_steps: int = 50000,
+        lip_sync_layers: list[int] | None = None,
         video_patch_size: tuple[int, int, int] = (1, 2, 2),
         video_latent_channels: int = 16,
         video_rope_theta: float = 10000.0,
@@ -65,6 +69,11 @@ class DBDiT(nn.Module):
         self.dim = dim
         self.num_layers = num_layers
         self.cbga_layers = set(cbga_layers or [])
+        # Lip-sync layers default to same as CBGA layers
+        self.lip_sync_layers = set(
+            lip_sync_layers if lip_sync_layers is not None
+            else (cbga_layers or [])
+        )
 
         # Timestep embedding
         self.t_embed = TimestepEmbedding(dim)
@@ -106,11 +115,13 @@ class DBDiT(nn.Module):
                 dim=dim,
                 num_heads=num_heads,
                 cond_dim=dim,
+                context_dim=context_dim,
                 ffn_ratio=ffn_ratio,
                 qk_norm=qk_norm,
                 dropout=dropout,
                 layer_idx=i,
                 cbga_layers=self.cbga_layers,
+                lip_sync_layers=self.lip_sync_layers,
             )
             for i in range(num_layers)
         ])
@@ -135,9 +146,11 @@ class DBDiT(nn.Module):
         nn.init.zeros_(self.audio_head.bias)
 
     def set_step(self, step: int):
-        """Update training step for CBGA gate warmup."""
+        """Update training step for CBGA and LipSync gate warmup."""
         for layer in self.layers:
-            if layer.cbga is not None:
+            if hasattr(layer, "set_step"):
+                layer.set_step(step)
+            elif layer.cbga is not None:
                 layer.cbga.set_step(step)
 
     def forward(
@@ -147,6 +160,7 @@ class DBDiT(nn.Module):
         t: torch.Tensor,
         text_emb: torch.Tensor,
         first_frame_mask: torch.Tensor | None = None,
+        mouth_mask: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass predicting velocity field for flow matching.
 
@@ -157,6 +171,8 @@ class DBDiT(nn.Module):
             text_emb: Text embeddings (B, L_text, D_text).
             first_frame_mask: Optional mask (B, 1, 1, H_v, W_v) for I2VA.
                               First frame is clean (t=1), model predicts 0 velocity there.
+            mouth_mask: Optional spatial mask (B, H_v, W_v) for lip-sync attention.
+                        Higher values = mouth region. Can be 0-filled for non-talking samples.
 
         Returns:
             Tuple of (video_velocity, audio_velocity):
@@ -182,7 +198,8 @@ class DBDiT(nn.Module):
         # Apply dual-branch transformer layers
         for layer in self.layers:
             v_tokens, a_tokens = layer(
-                v_tokens, a_tokens, t_emb, text_emb, video_grid
+                v_tokens, a_tokens, t_emb, text_emb, video_grid,
+                mouth_mask=mouth_mask,
             )
 
         # Final norm

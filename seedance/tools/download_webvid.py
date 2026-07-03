@@ -148,7 +148,7 @@ def download_video(info: dict, output_dir: str, timeout: int = 60) -> Optional[d
     yt_dlp = _find_yt_dlp()
     cmd = [
         yt_dlp,
-        "-f", "best[height<=360]",  # WebVid videos are low-res
+        "-f", "best",  # WebVid videos are low-res direct links
         "-o", output_template,
         "--no-playlist",
         "--socket-timeout", str(timeout),

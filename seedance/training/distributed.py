@@ -9,13 +9,27 @@ import torch.distributed as dist
 def setup_distributed() -> tuple[int, int, torch.device]:
     """Initialize distributed training environment.
 
+    Supports both single-node and multi-node via torchrun:
+        torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 \
+            --master_addr=192.168.1.1 --master_port=29500 \
+            -m seedance.training --config configs/train/stage1.yaml
+
     Returns:
         Tuple of (local_rank, world_size, device).
     """
+    # Multi-node / torchrun: RANK, WORLD_SIZE, LOCAL_RANK set by launcher
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
+
+        if not dist.is_initialized():
+            dist.init_process_group(
+                backend="nccl",
+                rank=rank,
+                world_size=world_size,
+            )
+    # Single-node multi-GPU: auto-detect all visible GPUs
     elif torch.cuda.device_count() > 1:
         rank = 0
         world_size = torch.cuda.device_count()
@@ -28,6 +42,8 @@ def setup_distributed() -> tuple[int, int, torch.device]:
         local_rank = 0
 
     device = torch.device(f"cuda:{local_rank}" if torch.cuda.is_available() else "cpu")
+    if is_main_process():
+        print(f"[Distributed] world_size={world_size}, local_rank={local_rank}")
     return local_rank, world_size, device
 
 
@@ -125,3 +141,57 @@ def is_main_process() -> bool:
     if dist.is_initialized():
         return dist.get_rank() == 0
     return True
+
+
+def wrap_dataloader(loader, world_size: int, rank: int):
+    """Replace the loader's sampler with a DistributedSampler.
+
+    Call ``loader.sampler.set_epoch(epoch)`` each epoch to shuffle differently
+    across ranks.
+
+    Args:
+        loader: DataLoader to wrap (modified in-place).
+        world_size: Total number of processes.
+        rank: Rank of current process.
+
+    Returns:
+        The modified DataLoader.
+    """
+    from torch.utils.data.distributed import DistributedSampler
+
+    if world_size <= 1:
+        return loader
+
+    sampler = DistributedSampler(
+        loader.dataset,
+        num_replicas=world_size,
+        rank=rank,
+        shuffle=True,
+        drop_last=True,
+    )
+    # Replace the loader's sampler; keep other settings
+    loader.sampler = sampler
+    # shuffle must be False when sampler is used
+    loader.shuffle = False
+    loader.drop_last = True
+    return loader
+
+
+def all_reduce_losses(losses: dict[str, float]) -> dict[str, float]:
+    """Average loss values across all distributed processes.
+
+    Args:
+        losses: Dict of loss names to scalar values (on current device).
+
+    Returns:
+        The same dict with values averaged across all ranks.
+    """
+    if not dist.is_initialized() or dist.get_world_size() <= 1:
+        return losses
+
+    world_size = dist.get_world_size()
+    for k in losses:
+        t = torch.tensor(losses[k], device="cuda")
+        dist.all_reduce(t, op=dist.ReduceOp.AVG)
+        losses[k] = t.item()
+    return losses

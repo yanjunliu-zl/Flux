@@ -39,11 +39,11 @@ def build_manifest(
     # Load captions
     captions = {}
     if captions_file and os.path.exists(captions_file):
-        with open(captions_file, "r") as f:
+        with open(captions_file, "r", encoding="utf-8") as f:
             captions = json.load(f)
 
     video_path = Path(video_dir)
-    video_files = list(video_path.glob("*.mp4"))
+    video_files = list(video_path.glob("*.mp4")) + list(video_path.glob("*/*.mp4"))
 
     # Gather video metadata
     rows = []
@@ -101,7 +101,7 @@ def build_manifest(
         split_path = output_path.replace(".csv", f"_{split}.csv") if "train" not in output_path else (
             output_path.replace("train", split) if split == "val" else output_path
         )
-        with open(split_path, "w", newline="") as f:
+        with open(split_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(data)

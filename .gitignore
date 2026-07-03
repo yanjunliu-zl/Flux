@@ -1,0 +1,47 @@
+# ── Python ──────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+*.whl
+*.so
+*.pyd
+
+# ── Virtual environment ─────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Data (large files, not in git) ──────────────────────────────────
+data/
+!data/manifests/
+data/manifests/*.csv
+data/manifests/*.json
+data/manifests/README.md
+checkpoints/
+
+# ── Training outputs ────────────────────────────────────────────────
+runs/
+outputs/
+*.log
+
+# ── IDE / Editor ────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── OS ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Misc ────────────────────────────────────────────────────────────
+.cc-history/
+=4.9.0
+uv.lock
+wandb/

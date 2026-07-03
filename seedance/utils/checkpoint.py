@@ -1,36 +1,63 @@
-"""Checkpoint save/load with FSDP state dict handling."""
+"""Checkpoint save/load with FSDP/DDP state dict handling."""
+
+from __future__ import annotations
 
 import os
 import torch
 import torch.nn as nn
 import torch.distributed as dist
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
-from seedance.training.trainer import TrainingState
+if TYPE_CHECKING:
+    from seedance.training.trainer import TrainingState
+
+
+def _is_fsdp(model: nn.Module) -> bool:
+    """Check if model is wrapped with FSDP."""
+    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+    return isinstance(model, FSDP)
+
+
+def _get_model_state(model: nn.Module) -> dict:
+    """Get raw model state dict, handling FSDP/DDP wrappers.
+
+    For FSDP: uses FSDP.state_dict() which consolidates across shards.
+    For DDP: accesses model.module.
+    For unwrapped: direct state_dict().
+    """
+    if _is_fsdp(model):
+        # FSDP.state_dict() gathers full unsharded weights
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        with FSDP.state_dict_type(model, torch.distributed.fsdp.StateDictType.FULL_STATE_DICT):
+            return model.state_dict()
+    elif hasattr(model, "module"):
+        # DDP wrapper
+        return model.module.state_dict()
+    else:
+        return model.state_dict()
 
 
 def save_checkpoint(
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
     scheduler,
-    state: TrainingState,
+    state: "TrainingState",
     path: str,
 ):
     """Save training checkpoint.
 
+    Handles FSDP (full state dict consolidation), DDP, and unwrapped models.
+    Only call from the main process.
+
     Args:
-        model: Model (may be FSDP-wrapped).
+        model: Model (may be FSDP/DDP-wrapped).
         optimizer: Optimizer.
         scheduler: Learning rate scheduler.
         state: TrainingState with step/epoch info.
         path: Output file path.
     """
-    # Get raw state dict (handle FSDP wrapping)
-    if hasattr(model, "_fsdp_wrapped_module"):
-        model_state = model.state_dict()
-    elif hasattr(model, "module"):
-        model_state = model.module.state_dict()
-    else:
-        model_state = model.state_dict()
+    model_state = _get_model_state(model)
 
     checkpoint = {
         "model": model_state,
@@ -53,8 +80,10 @@ def load_checkpoint(
     scheduler,
     path: str,
     device: torch.device,
-) -> TrainingState:
+) -> "TrainingState":
     """Load training checkpoint.
+
+    Handles FSDP (full state dict distribution), DDP, and unwrapped models.
 
     Args:
         model: Model to load weights into.
@@ -67,14 +96,18 @@ def load_checkpoint(
         TrainingState with restored step/epoch.
     """
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    model_state = checkpoint["model"]
 
-    # Load model weights
-    if hasattr(model, "_fsdp_wrapped_module"):
-        model.load_state_dict(checkpoint["model"])
+    # Load model weights (FSDP-aware)
+    if _is_fsdp(model):
+        from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        with FSDP.state_dict_type(model, torch.distributed.fsdp.StateDictType.FULL_STATE_DICT):
+            model.load_state_dict(model_state)
     elif hasattr(model, "module"):
-        model.module.load_state_dict(checkpoint["model"])
+        # DDP wrapper
+        model.module.load_state_dict(model_state)
     else:
-        model.load_state_dict(checkpoint["model"])
+        model.load_state_dict(model_state)
 
     # Move model to target device
     model.to(device)
@@ -94,7 +127,8 @@ def load_checkpoint(
     if scheduler is not None and "scheduler" in checkpoint:
         scheduler.load_state_dict(checkpoint["scheduler"])
 
-    # Restore training state
+    # Restore training state (lazy import to break circular dependency)
+    from seedance.training.trainer import TrainingState
     state = TrainingState(
         step=checkpoint["state"]["step"],
         epoch=checkpoint["state"]["epoch"],

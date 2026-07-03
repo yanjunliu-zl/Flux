@@ -5,10 +5,23 @@ training:
   stage: 1
   description: "Video-only pretraining on large-scale dataset"
 
+  # Model architecture (1.44B params, Base variant)
+  model:
+    dim: 1024
+    num_layers: 24
+    num_heads: 16
+    ffn_ratio: 4.0
+    qk_norm: true
+    dropout: 0.0
+    video_patch_size: [1, 2, 2]
+    video_latent_channels: 16
+    audio_patch_size: [1, 4]
+    audio_latent_channels: 8
+
   # Data
   data:
     _target_: seedance.data.VideoDataset
-    manifest_path: "data/manifests/train.csv"
+    manifest_path: "data/manifests/train_stage1.csv"
     resolution: 256
     num_frames: 32
     frame_stride: 1
@@ -46,8 +59,9 @@ training:
 
   # Training loop
   max_steps: 500000
-  batch_size: 4  # Per GPU
-  gradient_accumulation_steps: 4  # Effective batch = 4 * 4 * 8 = 128
+  batch_size: 8  # Per GPU (increased from 4 for better GPU utilization)
+  gradient_accumulation_steps: 2  # Effective batch = 8 * 2 = 16
+  num_workers: 8  # More CPU workers for video I/O
   mixed_precision: "bf16"
   gradient_checkpointing: true
 
@@ -69,6 +83,8 @@ training:
     checkpoint_every: 10000
     keep_last_n_checkpoints: 5
     wandb: false
+    tensorboard: true
+    tensorboard_log_dir: "runs/stage1_video_pretrain"
 
   # Distributed
   distributed:

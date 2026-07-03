@@ -64,6 +64,7 @@ def filter_videos(
     input_dir: str,
     output_dir: str,
     min_height: int = 360,
+    min_width: int = 360,
     min_dur: float = 2.0,
     max_dur: float = 10.0,
     min_flow: float = 0.05,
@@ -87,7 +88,7 @@ def filter_videos(
     results = {"passed": [], "failed_resolution": [], "failed_duration": [], "failed_flow": []}
 
     for vf in video_files:
-        if not check_resolution(str(vf), min_height):
+        if not check_resolution(str(vf), min_height, min_width):
             results["failed_resolution"].append(vf.name)
             continue
         if not check_duration(str(vf), min_dur, max_dur):
@@ -121,13 +122,14 @@ def main():
     parser.add_argument("--input", type=str, required=True, help="Input directory")
     parser.add_argument("--output", type=str, default="data/filtered", help="Output directory")
     parser.add_argument("--min_height", type=int, default=360)
+    parser.add_argument("--min_width", type=int, default=360)
     parser.add_argument("--min_duration", type=float, default=2.0)
     parser.add_argument("--max_duration", type=float, default=10.0)
     parser.add_argument("--min_flow", type=float, default=0.05)
     parser.add_argument("--max_flow", type=float, default=5.0)
     args = parser.parse_args()
 
-    filter_videos(args.input, args.output, args.min_height,
+    filter_videos(args.input, args.output, args.min_height, args.min_width,
                   args.min_duration, args.max_duration, args.min_flow, args.max_flow)
 
 

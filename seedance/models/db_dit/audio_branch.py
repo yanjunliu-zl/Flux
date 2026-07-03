@@ -19,6 +19,7 @@ class AudioBranchBlock(nn.Module):
         dim: Hidden dimension.
         num_heads: Number of attention heads.
         cond_dim: Timestep conditioning dimension.
+        context_dim: Dimension of cross-attention text context.
         ffn_ratio: FFN hidden dimension ratio.
         qk_norm: Whether to apply QK normalization.
         dropout: Dropout rate.
@@ -29,11 +30,14 @@ class AudioBranchBlock(nn.Module):
         dim: int,
         num_heads: int,
         cond_dim: int,
+        context_dim: int | None = None,
         ffn_ratio: float = 4.0,
         qk_norm: bool = True,
         dropout: float = 0.0,
     ):
         super().__init__()
+        if context_dim is None:
+            context_dim = dim
         self.dim = dim
 
         # Self-attention
@@ -42,10 +46,11 @@ class AudioBranchBlock(nn.Module):
             dim, num_heads, qk_norm=qk_norm, dropout=dropout
         )
 
-        # Cross-attention to text
+        # Cross-attention to text (K/V dim = context_dim)
         self.adaln_cross = AdaLN(dim, cond_dim)
         self.cross_attn = MultiHeadAttention(
-            dim, num_heads, qk_norm=qk_norm, dropout=dropout, cross_attn=True
+            dim, num_heads, context_dim=context_dim,
+            qk_norm=qk_norm, dropout=dropout, cross_attn=True,
         )
 
         # Feed-forward network

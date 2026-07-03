@@ -31,18 +31,20 @@ class TestFlowMatching:
     def test_loss_decreases(self, fm, model, device, dtype):
         """Flow matching loss should decrease with optimization."""
         B = 2
+        # Fix seed for deterministic test
+        torch.manual_seed(42)
         v_clean = torch.randn(B, 16, 4, 16, 16, device=device, dtype=dtype)
         a_clean = torch.randn(B, 8, 4, 16, device=device, dtype=dtype)
         text_emb = torch.randn(B, 16, 256, device=device, dtype=dtype)
 
-        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
 
         # Initial loss
         losses_before = fm.get_training_loss(model, v_clean, a_clean, text_emb)
         loss_before = losses_before["loss"].item()
 
-        # Optimize a few steps (small number for test speed on CPU)
-        for _ in range(2):
+        # Optimize enough steps for convergence on the fixed sample
+        for _ in range(10):
             losses = fm.get_training_loss(model, v_clean, a_clean, text_emb)
             loss = losses["loss"]
             optimizer.zero_grad()

@@ -5,6 +5,19 @@ training:
   stage: 2
   description: "Audio-only pretraining on mel-spectrogram dataset"
 
+  # Model architecture (1.44B params, Base variant)
+  model:
+    dim: 1024
+    num_layers: 24
+    num_heads: 16
+    ffn_ratio: 4.0
+    qk_norm: true
+    dropout: 0.0
+    video_patch_size: [1, 2, 2]
+    video_latent_channels: 16
+    audio_patch_size: [1, 4]
+    audio_latent_channels: 8
+
   data:
     _target_: seedance.data.AudioDataset
     manifest_path: "data/manifests/audio_train.csv"
@@ -53,6 +66,8 @@ training:
     checkpoint_every: 10000
     keep_last_n_checkpoints: 5
     wandb: true
+    tensorboard: true
+    tensorboard_log_dir: "runs/stage2_audio_pretrain"
 
   distributed:
     backend: "nccl"

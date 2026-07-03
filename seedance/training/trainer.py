@@ -3,8 +3,10 @@
 import os
 import time
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from dataclasses import dataclass, field
 from collections import defaultdict
 
@@ -54,6 +56,8 @@ class Trainer:
         device: torch.device,
         text_encoder: nn.Module | None = None,
         val_loader: DataLoader | None = None,
+        world_size: int = 1,
+        local_rank: int = 0,
     ):
         self.model = model
         self.train_loader = train_loader
@@ -61,6 +65,8 @@ class Trainer:
         self.config = config
         self.device = device
         self.text_encoder = text_encoder
+        self.world_size = world_size
+        self.local_rank = local_rank
 
         # Extract config values
         self.max_steps = config.get("max_steps", 500000)
@@ -72,6 +78,8 @@ class Trainer:
         self.checkpoint_every = config.get("logging", {}).get("checkpoint_every", 10000)
         self.checkpoint_dir = config.get("checkpoint_dir", "checkpoints")
         self.use_wandb = config.get("logging", {}).get("wandb", False)
+        self.use_tensorboard = config.get("logging", {}).get("tensorboard", False)
+        self.tb_log_dir = config.get("logging", {}).get("tensorboard_log_dir", "runs")
 
         # Setup optimizer
         opt_cfg = config.get("optimizer", {})
@@ -125,6 +133,12 @@ class Trainer:
             except ImportError:
                 self.use_wandb = False
 
+        # TensorBoard
+        self.tb_writer = None
+        if self.use_tensorboard and is_main_process():
+            self.tb_writer = SummaryWriter(log_dir=self.tb_log_dir)
+            print(f"[Trainer] TensorBoard logging to: {self.tb_log_dir}")
+
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
     def train_step(
@@ -172,13 +186,19 @@ class Trainer:
 
         # Preprocess: raw pixel video -> "latent-like" for DB-DiT
         # In production: VideoVAE.encode(video). For now: downscale + pad channels
+        # video: (B, C, T, H, W)  e.g. (4, 3, 32, 256, 256)
         B, C, T, H, W = video.shape
-        v_latent = torch.nn.functional.interpolate(
-            video.reshape(B*T, C, H, W), size=(H//8, W//8), mode='bilinear', antialias=True
-        ).reshape(B, C, T, H//8, W//8)
+        # Merge B and T for 2D interpolation: (B*T, C, H, W)
+        v_flat = video.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+        v_flat = torch.nn.functional.interpolate(
+            v_flat, size=(H // 8, W // 8), mode='bilinear', antialias=True,
+        )
+        # Restore to (B, C, T, H', W')
+        v_latent = v_flat.reshape(B, T, C, H // 8, W // 8).permute(0, 2, 1, 3, 4)
         # Pad 3 channels -> 16 channels (VAE latent dim)
         v_latent = torch.cat([
-            v_latent, torch.zeros(B, 13, T, H//8, W//8, device=self.device, dtype=video.dtype)
+            v_latent,
+            torch.zeros(B, 13, T, H // 8, W // 8, device=self.device, dtype=video.dtype),
         ], dim=1)
         a_latent = audio  # AudioVAE.encode(audio) in practice
 
@@ -218,17 +238,22 @@ class Trainer:
         data_iter = iter(self.train_loader)
         running_losses = defaultdict(float)
 
-        print(f"[Trainer] Starting training from step {step}, max_steps={self.max_steps}")
+        if is_main_process():
+            print(f"[Trainer] Starting training from step {step}, max_steps={self.max_steps}")
         t_start = time.time()
 
         while step < self.max_steps:
-            # Get batch
+            # Get batch (with epoch-aware DistributedSampler)
             try:
                 batch = next(data_iter)
             except StopIteration:
+                self.state.epoch += 1
+                # Notify DistributedSampler of new epoch for different shuffle
+                if (hasattr(self.train_loader, "sampler")
+                        and hasattr(self.train_loader.sampler, "set_epoch")):
+                    self.train_loader.sampler.set_epoch(self.state.epoch)
                 data_iter = iter(self.train_loader)
                 batch = next(data_iter)
-                self.state.epoch += 1
 
             # Training step
             losses = self.train_step(batch)
@@ -255,32 +280,42 @@ class Trainer:
             step += 1
             self.state.step = step
 
-            # Logging
-            if step % self.log_every == 0 and is_main_process():
-                elapsed = time.time() - t_start
-                steps_per_sec = self.log_every / max(elapsed, 1e-8)
+            # Logging (all-reduce losses across GPUs for accurate reporting)
+            if step % self.log_every == 0:
                 avg_losses = {
                     k: v / self.log_every for k, v in running_losses.items()
                 }
+                # Average losses across all ranks
+                from seedance.training.distributed import all_reduce_losses
+                avg_losses = all_reduce_losses(avg_losses)
 
-                lr = self.scheduler.get_last_lr()[0]
-                print(
-                    f"[Step {step}/{self.max_steps}] "
-                    + " | ".join(f"{k}={v:.4f}" for k, v in avg_losses.items())
-                    + f" | lr={lr:.2e} | {steps_per_sec:.1f} steps/s"
-                )
+                if is_main_process():
+                    elapsed = time.time() - t_start
+                    steps_per_sec = self.log_every / max(elapsed, 1e-8)
+                    lr = self.scheduler.get_last_lr()[0]
+                    print(
+                        f"[Step {step}/{self.max_steps}] "
+                        + " | ".join(f"{k}={v:.4f}" for k, v in avg_losses.items())
+                        + f" | lr={lr:.2e} | {steps_per_sec:.1f} steps/s"
+                    )
 
-                if self.wandb_run is not None:
-                    self.wandb_run.log({
-                        **{f"train/{k}": v for k, v in avg_losses.items()},
-                        "train/lr": lr,
-                        "train/step": step,
-                    })
+                    if self.wandb_run is not None:
+                        self.wandb_run.log({
+                            **{f"train/{k}": v for k, v in avg_losses.items()},
+                            "train/lr": lr,
+                            "train/step": step,
+                        })
+
+                    if self.tb_writer is not None:
+                        for k, v in avg_losses.items():
+                            self.tb_writer.add_scalar(f"train/{k}", v, step)
+                        self.tb_writer.add_scalar("train/lr", lr, step)
+                        self.tb_writer.add_scalar("train/steps_per_sec", steps_per_sec, step)
 
                 running_losses.clear()
                 t_start = time.time()
 
-            # Checkpoint
+            # Checkpoint (only on main process, FSDP-aware)
             if step % self.checkpoint_every == 0 and is_main_process():
                 ckpt_path = os.path.join(
                     self.checkpoint_dir, f"step_{step:07d}.pt"
@@ -291,4 +326,18 @@ class Trainer:
                 )
                 print(f"[Checkpoint] Saved to {ckpt_path}")
 
+        # Cleanup
+        if self.tb_writer is not None:
+            self.tb_writer.close()
+        if self.wandb_run is not None:
+            self.wandb_run.finish()
+        if dist.is_initialized():
+            dist.destroy_process_group()
+
         print(f"[Trainer] Training complete at step {step}")
+
+
+if __name__ == "__main__":
+    # Delegate to __main__.py when run as python -m seedance.training.trainer
+    from seedance.training.__main__ import main
+    main()

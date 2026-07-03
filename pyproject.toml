@@ -24,9 +24,9 @@ classifiers = [
 
 # Core dependencies (uv will resolve from here)
 dependencies = [
-    "torch==2.8.0",
-    "torchvision==0.23.0",
-    "torchaudio==2.8.0",
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "torchaudio==2.10.0",
     "transformers>=4.45.0",
     "diffusers>=0.31.0",
     "accelerate>=1.0.0",
@@ -56,6 +56,17 @@ seedance-infer-i2va = "scripts.inference_i2va:main"
 [tool.setuptools.packages.find]
 include = ["seedance*"]
 
+# PyTorch CUDA index (cu128 = CUDA 12.8, compatible with 13.x drivers)
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
@@ -69,18 +80,24 @@ tools = [
     "yt-dlp>=2024.0",
     "scenedetect>=0.6.0",
 ]
+face = [
+    "insightface>=1.0",
+    "mediapipe>=0.10",
+    "onnxruntime>=1.15",
+]
 t5 = [
     "sentencepiece>=0.2.0",
     "protobuf>=4.25.0",
 ]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.0",
     "pytest-cov>=5.0",
     "black>=24.0",
     "ruff>=0.5.0",
     "mypy>=1.10.0",
+    "tensorboard>=2.14.0",
 ]
 
 [tool.black]

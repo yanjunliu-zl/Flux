@@ -291,7 +291,7 @@ def main():
         # Flatten tags/user fields
         for v in succeeded:
             v.pop("url", None)
-        with open(manifest_path, "w", newline="") as f:
+        with open(manifest_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=succeeded[0].keys())
             writer.writeheader()
             writer.writerows(succeeded)
