@@ -149,8 +149,8 @@ class MultiHeadAttention(nn.Module):
             )
             out = out.reshape(B, N, D)
 
-        elif self._backend == "flash_attn" and attn_mask is None:
-            # Flash Attention 2/3 — Linux only
+        elif self._backend == "flash_attn" and attn_mask is None and q.dtype in (torch.float16, torch.bfloat16):
+            # Flash Attention 2/3 — Linux only, requires fp16 or bf16
             q = q.contiguous()
             k = k.contiguous()
             v = v.contiguous()
