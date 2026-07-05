@@ -1,4 +1,4 @@
-# 🎬 Seedance 2.0
+# 🎬 xMedia-Gen 2.0
 
 **Dual-Branch Diffusion Transformer for Native Audio-Video Joint Generation**
 
