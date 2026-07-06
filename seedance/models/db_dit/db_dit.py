@@ -55,6 +55,7 @@ class DBDiT(nn.Module):
         cbga_layers: list[int] | None = None,
         cbga_gate_warmup_steps: int = 50000,
         lip_sync_layers: list[int] | None = None,
+        moe_config: dict | None = None,
         video_patch_size: tuple[int, int, int] = (1, 2, 2),
         video_latent_channels: int = 16,
         video_rope_theta: float = 10000.0,
@@ -122,6 +123,7 @@ class DBDiT(nn.Module):
                 layer_idx=i,
                 cbga_layers=self.cbga_layers,
                 lip_sync_layers=self.lip_sync_layers,
+                moe_config=moe_config,
             )
             for i in range(num_layers)
         ])
@@ -175,9 +177,8 @@ class DBDiT(nn.Module):
                         Higher values = mouth region. Can be 0-filled for non-talking samples.
 
         Returns:
-            Tuple of (video_velocity, audio_velocity):
-                video_velocity: (B, C_v, T_v, H_v, W_v)
-                audio_velocity: (B, C_a, F_a, T_a)
+            Tuple of (video_velocity, audio_velocity, moe_aux_losses):
+                moe_aux_losses is None if MoE is not enabled.
         """
         B = v_latent.shape[0]
 
@@ -195,12 +196,22 @@ class DBDiT(nn.Module):
         W_v = v_latent.shape[4] // v_patch_size[2]
         video_grid = (T_v, H_v, W_v)
 
-        # Apply dual-branch transformer layers
+        # Apply dual-branch transformer layers, collect MoE aux losses
+        moe_losses_total = None
         for layer in self.layers:
-            v_tokens, a_tokens = layer(
+            result = layer(
                 v_tokens, a_tokens, t_emb, text_emb, video_grid,
                 mouth_mask=mouth_mask,
             )
+            if len(result) == 3:
+                v_tokens, a_tokens, moe_aux = result
+                if moe_aux is not None:
+                    if moe_losses_total is None:
+                        moe_losses_total = {}
+                    for k, v in moe_aux.items():
+                        moe_losses_total[k] = moe_losses_total.get(k, 0.0) + v
+            else:
+                v_tokens, a_tokens = result
 
         # Final norm
         v_tokens = self.final_norm_video(v_tokens)
@@ -231,4 +242,4 @@ class DBDiT(nn.Module):
             # Zero out velocity for the first frame (it's clean)
             v_velocity = v_velocity * first_frame_mask
 
-        return v_velocity, a_velocity
+        return v_velocity, a_velocity, moe_losses_total

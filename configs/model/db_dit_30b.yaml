@@ -1,0 +1,56 @@
+# =============================================================================
+# DB-DiT 30B Configuration — flagship model matching Movie Gen scale
+# =============================================================================
+#
+# HARDWARE REQUIREMENTS (minimum 4× A100 80GB or 2× H100, FSDP FULL_SHARD):
+#   Model weights (bf16):           ~60 GB
+#   Optimizer states (AdamW, fp32): ~120 GB
+#   Activations (grad ckpt on):     ~40 GB (batch=1, 32fr@256px)
+#   ─────────────────────────────────────────
+#   Total per GPU (4-GPU FSDP):     ~55 GB  ✓
+#   Total per GPU (2-GPU FSDP):     ~110 GB ✗  (need activation offloading)
+#
+# Launch:
+#   # 4 GPUs (minimum)
+#   torchrun --nproc_per_node=4 -m seedance.training --config configs/train/stage1_30b.yaml
+#
+#   # 8 GPUs (recommended — larger batch, no OOM risk)
+#   torchrun --nproc_per_node=8 -m seedance.training --config configs/train/stage1_30b.yaml
+# =============================================================================
+
+model:
+  _target_: seedance.models.DBDiT
+
+  # ── Shared ────────────────────────────────────────────────────────────
+  dim: 4096
+  num_layers: 32
+  num_heads: 32
+  ffn_ratio: 4.0
+  qk_norm: true
+  dropout: 0.0
+
+  # ── Cross-Modal Bridge (CBGA) ─────────────────────────────────────────
+  cbga_layers: [8, 16, 24]
+  cbga_gate_warmup_steps: 50000
+
+  # ── Vision Branch ─────────────────────────────────────────────────────
+  video:
+    patch_size: [1, 2, 2]
+    latent_channels: 16
+    rope_theta: 10000
+    rope_dim_t: 42               # head_dim=128, ~1/3 each
+    rope_dim_h: 43
+    rope_dim_w: 43
+
+  # ── Audio Branch ──────────────────────────────────────────────────────
+  audio:
+    patch_size: [1, 4]
+    latent_channels: 8
+    rope_theta: 10000
+
+  # ── Text Encoder ──────────────────────────────────────────────────────
+  text:
+    encoder: "google/t5-v1_1-xxl"  # 11B T5 — matches model scale
+    dim_t5: 4096
+    max_length: 226
+    pooled: false

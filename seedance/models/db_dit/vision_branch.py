@@ -4,7 +4,7 @@ Each STDiT block processes video tokens through:
 1. Spatial self-attention (within each frame)
 2. Temporal self-attention (cross-frame at same spatial position)
 3. Cross-attention to text embeddings
-4. Feed-forward network
+4. Feed-forward network (dense MLP or MoE)
 
 All sub-blocks use AdaLN conditioning on timestep.
 """
@@ -29,6 +29,8 @@ class VisionBranchBlock(nn.Module):
         ffn_ratio: FFN hidden dimension ratio (default: 4.0).
         qk_norm: Whether to apply QK normalization.
         dropout: Dropout rate.
+        moe_config: If provided, use MoE FFN instead of dense MLP.
+                    Dict with keys: num_experts, top_k, expert_dim_ratio.
     """
 
     def __init__(
@@ -40,6 +42,7 @@ class VisionBranchBlock(nn.Module):
         ffn_ratio: float = 4.0,
         qk_norm: bool = True,
         dropout: float = 0.0,
+        moe_config: dict | None = None,
     ):
         super().__init__()
         if context_dim is None:
@@ -65,10 +68,22 @@ class VisionBranchBlock(nn.Module):
             qk_norm=qk_norm, dropout=dropout, cross_attn=True,
         )
 
-        # Feed-forward network
+        # Feed-forward network (dense MLP or MoE)
         self.adaln_ffn = AdaLN(dim, cond_dim)
-        ffn_hidden = int(dim * ffn_ratio)
-        self.ffn = MLP(dim, ffn_hidden, dim, dropout=dropout)
+        if moe_config is not None:
+            from seedance.models.db_dit.moe import MoEFFN
+            self.ffn = MoEFFN(
+                dim=dim,
+                num_experts=moe_config.get("num_experts", 32),
+                top_k=moe_config.get("top_k", 2),
+                expert_dim_ratio=moe_config.get("expert_dim_ratio", 1.0),
+                shared_expert=moe_config.get("shared_expert", True),
+            )
+            self._use_moe = True
+        else:
+            ffn_hidden = int(dim * ffn_ratio)
+            self.ffn = MLP(dim, ffn_hidden, dim, dropout=dropout)
+            self._use_moe = False
 
     def forward(
         self,
@@ -76,7 +91,7 @@ class VisionBranchBlock(nn.Module):
         t_emb: torch.Tensor,
         text_emb: torch.Tensor,
         video_grid: tuple[int, int, int],
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict | None]:
         """Forward pass for one vision branch block.
 
         Args:
@@ -86,30 +101,25 @@ class VisionBranchBlock(nn.Module):
             video_grid: (T, H, W) grid dimensions for reshape.
 
         Returns:
-            Video tokens (B, T*H*W, D).
+            Tuple of (video tokens, moe_aux_losses | None).
         """
         B, N, D = x.shape
         T, H, W = video_grid
         assert N == T * H * W, f"Token count {N} != T*H*W = {T}*{H}*{W} = {T*H*W}"
+        moe_aux = None
 
         # 1. Spatial Self-Attention (within each frame)
         x_norm, shift, scale, gate = self.adaln_spatial(x, t_emb)
-        # Reshape: (B, T, H, W, D) -> (B*T, H*W, D)
         x_3d = x_norm.reshape(B, T, H, W, D)
         x_spatial = x_3d.reshape(B * T, H * W, D)
-        # Apply spatial attention
         attn_out = self.spatial_attn(x_spatial)
-        # Reshape back: (B*T, H*W, D) -> (B, T, H, W, D)
         attn_out = attn_out.reshape(B, T, H, W, D)
         x = x + gate.unsqueeze(1) * attn_out.reshape(B, N, D)
 
         # 2. Temporal Self-Attention (cross-frame at same spatial position)
         x_norm, shift, scale, gate = self.adaln_temporal(x, t_emb)
-        # Reshape: (B, T*H*W, D) -> (B*H*W, T, D)
         x_temporal = x_norm.reshape(B, T, H * W, D).permute(0, 2, 1, 3).reshape(B * H * W, T, D)
-        # Apply temporal attention
         attn_out = self.temporal_attn(x_temporal)
-        # Reshape back: (B*H*W, T, D) -> (B, T*H*W, D)
         attn_out = attn_out.reshape(B, H * W, T, D).permute(0, 2, 1, 3).reshape(B, N, D)
         x = x + gate.unsqueeze(1) * attn_out
 
@@ -120,7 +130,10 @@ class VisionBranchBlock(nn.Module):
 
         # 4. Feed-Forward Network
         x_norm, shift, scale, gate = self.adaln_ffn(x, t_emb)
-        ffn_out = self.ffn(x_norm)
+        if self._use_moe:
+            ffn_out, moe_aux = self.ffn(x_norm)
+        else:
+            ffn_out = self.ffn(x_norm)
         x = x + gate.unsqueeze(1) * ffn_out
 
-        return x
+        return x, moe_aux

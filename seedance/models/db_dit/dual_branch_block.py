@@ -47,6 +47,7 @@ class DualBranchBlock(nn.Module):
         layer_idx: int = 0,
         cbga_layers: set[int] | None = None,
         lip_sync_layers: set[int] | None = None,
+        moe_config: dict | None = None,
     ):
         super().__init__()
         self.layer_idx = layer_idx
@@ -65,6 +66,7 @@ class DualBranchBlock(nn.Module):
             ffn_ratio=ffn_ratio,
             qk_norm=qk_norm,
             dropout=dropout,
+            moe_config=moe_config,
         )
 
         # Audio branch (DiT) — cross-attention matches text encoder dim
@@ -76,6 +78,7 @@ class DualBranchBlock(nn.Module):
             ffn_ratio=ffn_ratio,
             qk_norm=qk_norm,
             dropout=dropout,
+            moe_config=moe_config,
         )
 
         # Cross-modal bridge (CBGA) — only at specified layers
@@ -128,15 +131,25 @@ class DualBranchBlock(nn.Module):
             mouth_mask: Optional spatial mask (B, H_v, W_v) for lip-sync attention.
 
         Returns:
-            Tuple of (updated_v_tokens, updated_a_tokens).
+            Tuple of (updated_v_tokens, updated_a_tokens, moe_aux_losses).
+            moe_aux_losses is None if MoE is not enabled.
         """
         T_v, H_v, W_v = video_grid
+        moe_v, moe_a = None, None
 
         # 1. Vision branch forward
-        v_tokens = self.vision_block(v_tokens, t_emb, text_emb, video_grid)
+        v_result = self.vision_block(v_tokens, t_emb, text_emb, video_grid)
+        if isinstance(v_result, tuple):
+            v_tokens, moe_v = v_result
+        else:
+            v_tokens = v_result
 
         # 2. Audio branch forward
-        a_tokens = self.audio_block(a_tokens, t_emb, text_emb)
+        a_result = self.audio_block(a_tokens, t_emb, text_emb)
+        if isinstance(a_result, tuple):
+            a_tokens, moe_a = a_result
+        else:
+            a_tokens = a_result
 
         # 3. Cross-modal bridge (if enabled for this layer)
         if self.cbga is not None:
@@ -149,7 +162,16 @@ class DualBranchBlock(nn.Module):
                 T_lat=T_v, H_lat=H_v, W_lat=W_v,
             )
 
-        return v_tokens, a_tokens
+        # Merge MoE aux losses
+        moe_aux = None
+        if moe_v is not None or moe_a is not None:
+            moe_aux = {}
+            for src in [moe_v, moe_a]:
+                if src:
+                    for k, v in src.items():
+                        moe_aux[k] = moe_aux.get(k, 0.0) + v
+
+        return v_tokens, a_tokens, moe_aux
 
     def get_viseme_logits(
         self, a_tokens: torch.Tensor

@@ -2,6 +2,7 @@
 
 Simpler than the vision branch: audio tokens have a 1D sequence structure
 (flattened frequency × time), so only one self-attention is needed.
+Supports both dense MLP and MoE FFN.
 """
 
 import torch
@@ -23,6 +24,7 @@ class AudioBranchBlock(nn.Module):
         ffn_ratio: FFN hidden dimension ratio.
         qk_norm: Whether to apply QK normalization.
         dropout: Dropout rate.
+        moe_config: If provided, use MoE FFN instead of dense MLP.
     """
 
     def __init__(
@@ -34,6 +36,7 @@ class AudioBranchBlock(nn.Module):
         ffn_ratio: float = 4.0,
         qk_norm: bool = True,
         dropout: float = 0.0,
+        moe_config: dict | None = None,
     ):
         super().__init__()
         if context_dim is None:
@@ -46,24 +49,36 @@ class AudioBranchBlock(nn.Module):
             dim, num_heads, qk_norm=qk_norm, dropout=dropout
         )
 
-        # Cross-attention to text (K/V dim = context_dim)
+        # Cross-attention to text
         self.adaln_cross = AdaLN(dim, cond_dim)
         self.cross_attn = MultiHeadAttention(
             dim, num_heads, context_dim=context_dim,
             qk_norm=qk_norm, dropout=dropout, cross_attn=True,
         )
 
-        # Feed-forward network
+        # Feed-forward network (dense MLP or MoE)
         self.adaln_ffn = AdaLN(dim, cond_dim)
-        ffn_hidden = int(dim * ffn_ratio)
-        self.ffn = MLP(dim, ffn_hidden, dim, dropout=dropout)
+        if moe_config is not None:
+            from seedance.models.db_dit.moe import MoEFFN
+            self.ffn = MoEFFN(
+                dim=dim,
+                num_experts=moe_config.get("num_experts", 32),
+                top_k=moe_config.get("top_k", 2),
+                expert_dim_ratio=moe_config.get("expert_dim_ratio", 1.0),
+                shared_expert=moe_config.get("shared_expert", True),
+            )
+            self._use_moe = True
+        else:
+            ffn_hidden = int(dim * ffn_ratio)
+            self.ffn = MLP(dim, ffn_hidden, dim, dropout=dropout)
+            self._use_moe = False
 
     def forward(
         self,
         x: torch.Tensor,
         t_emb: torch.Tensor,
         text_emb: torch.Tensor,
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, dict | None]:
         """Forward pass for one audio branch block.
 
         Args:
@@ -72,8 +87,10 @@ class AudioBranchBlock(nn.Module):
             text_emb: Text embeddings (B, L_text, D).
 
         Returns:
-            Audio tokens (B, N_a, D).
+            Tuple of (audio tokens, moe_aux_losses | None).
         """
+        moe_aux = None
+
         # 1. Self-Attention
         x_norm, shift, scale, gate = self.adaln_self(x, t_emb)
         attn_out = self.self_attn(x_norm)
@@ -86,7 +103,10 @@ class AudioBranchBlock(nn.Module):
 
         # 3. Feed-Forward Network
         x_norm, shift, scale, gate = self.adaln_ffn(x, t_emb)
-        ffn_out = self.ffn(x_norm)
+        if self._use_moe:
+            ffn_out, moe_aux = self.ffn(x_norm)
+        else:
+            ffn_out = self.ffn(x_norm)
         x = x + gate.unsqueeze(1) * ffn_out
 
-        return x
+        return x, moe_aux

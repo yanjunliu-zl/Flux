@@ -1,0 +1,73 @@
+# =============================================================================
+# DB-DiT 30B MoE Configuration — Mixture-of-Experts for sparse activation
+# =============================================================================
+#
+# Total params:    ~28B
+# Activated/token: ~10B (top_k=2 out of 64 experts, + shared expert)
+# Sparse ratio:    35% activated
+#
+# Compared to dense 30B (full activation), MoE saves:
+#   - VRAM: ~65% (only active experts' weights need gradients)
+#   - FLOPs: ~65% (only active experts compute)
+#
+# HARDWARE (FSDP, bf16, grad ckpt, batch=1, 32fr@256px):
+#   Dense 30B:  4× A100 80GB minimum
+#   MoE  30B:   2× A100 80GB (expert weights sharded across GPUs)
+#
+# Architecture:
+#   - Dense components (attention, AdaLN, patch embeds): always active
+#   - 64 expert FFNs per layer: dim → 2*dim → dim each
+#   - Top-2 routing + 1 shared expert (DeepSeek/Mamoda2.5 style)
+#   - Load balancing loss (0.01 weight) + router z-loss (0.001)
+#
+# Launch:
+#   torchrun --nproc_per_node=2 scripts/train.py --config configs/train/stage1_30b_moe.yaml
+#   torchrun --nproc_per_node=4 scripts/train.py --config configs/train/stage1_30b_moe.yaml
+# =============================================================================
+
+model:
+  _target_: seedance.models.DBDiT
+
+  # ── Shared ────────────────────────────────────────────────────────────
+  dim: 4096
+  num_layers: 24
+  num_heads: 32
+  ffn_ratio: 2.0                   # Dense fallback; MoE overrides this
+  qk_norm: true
+  dropout: 0.0
+
+  # ── MoE Configuration ─────────────────────────────────────────────────
+  moe:
+    enabled: true
+    num_experts: 64                 # Total expert FFNs per layer
+    top_k: 2                        # Active experts per token
+    expert_dim_ratio: 0.5           # Hidden = dim * 0.5 (2048 for dim=4096)
+    shared_expert: true             # DeepSeek-style shared expert (always active)
+    router_z_loss_weight: 0.001
+    load_balance_weight: 0.01
+
+  # ── Cross-Modal Bridge (CBGA) ─────────────────────────────────────────
+  cbga_layers: [6, 12, 18]
+  cbga_gate_warmup_steps: 50000
+
+  # ── Vision Branch ─────────────────────────────────────────────────────
+  video:
+    patch_size: [1, 2, 2]
+    latent_channels: 16
+    rope_theta: 10000
+    rope_dim_t: 42
+    rope_dim_h: 43
+    rope_dim_w: 43
+
+  # ── Audio Branch ──────────────────────────────────────────────────────
+  audio:
+    patch_size: [1, 4]
+    latent_channels: 8
+    rope_theta: 10000
+
+  # ── Text Encoder ──────────────────────────────────────────────────────
+  text:
+    encoder: "google/t5-v1_1-xxl"
+    dim_t5: 4096
+    max_length: 226
+    pooled: false

@@ -1,0 +1,77 @@
+# =============================================================================
+# Stage 1 for 30B model — large-scale video pretraining
+#
+# LAUNCH ("--config" not "--config" like --config):
+#   torchrun --nproc_per_node=4 scripts/train.py --config configs/train/stage1_30b.yaml
+#   python scripts/train.py --config configs/train/stage1_30b.yaml  # single GPU test
+#
+# MINIMUM HARDWARE: 4× A100/H100 (80 GB), or 2× H200 (141 GB)
+# RECOMMENDED:       8× A100/H100 (80 GB) for larger batch
+# =============================================================================
+
+training:
+  stage: 1
+  description: "30B video-only pretraining"
+
+  model_config: "configs/model/db_dit_30b.yaml"
+
+  # Data
+  data:
+    _target_: seedance.data.VideoDataset
+    manifest_path: "data/manifests/train_stage1.csv"
+    resolution: 256
+    num_frames: 32
+    frame_stride: 1
+    fps_condition: true
+    caption_dropout_prob: 0.1
+
+  # Model initialization
+  model_init:
+    config: "configs/model/db_dit_30b.yaml"
+    vision_branch: "pixart"
+    temporal_layers: "zero"
+    audio_branch: "frozen"
+
+  # Optimization — lower LR for large model stability
+  optimizer:
+    type: "adamw"
+    lr: 1.0e-4
+    betas: [0.9, 0.95]       # β2=0.95 better for large DiT (SD3/Flux convention)
+    weight_decay: 0.1
+    eps: 1.0e-8
+
+  scheduler:
+    type: "cosine"
+    warmup_steps: 2000
+    min_lr: 1.0e-6
+
+  # Training loop — conservative batch per GPU
+  max_steps: 500000
+  batch_size: 1              # Per GPU — 30B model fills 80GB with grad ckpt
+  gradient_accumulation_steps: 32   # Effective batch = 1 * 4 * 32 = 128 (4 GPUs)
+  mixed_precision: "bf16"
+  gradient_checkpointing: true
+
+  # EMA
+  ema:
+    decay: 0.9999
+    update_every: 10
+
+  # Loss
+  loss:
+    type: "flow_matching"
+    logit_normal_mean: 0.0
+    logit_normal_std: 1.0
+
+  # Logging
+  logging:
+    log_every: 10
+    sample_every: 2000
+    checkpoint_every: 5000
+    keep_last_n_checkpoints: 3
+    wandb: false
+
+  # Distributed — MUST use FSDP for 30B
+  distributed:
+    backend: "nccl"
+    fsdp_sharding_strategy: "FULL_SHARD"

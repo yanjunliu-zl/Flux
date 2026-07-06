@@ -82,10 +82,15 @@ class FlowMatching(nn.Module):
             v_latent_t = v_latent_t * first_frame_mask + v_latent_clean * (1 - first_frame_mask)
 
         # Predict velocity
-        v_pred, a_pred = model(
+        model_out = model(
             v_latent_t, a_latent_t, t, text_emb,
             first_frame_mask=first_frame_mask,
         )
+        if len(model_out) == 3:
+            v_pred, a_pred, moe_aux = model_out
+        else:
+            v_pred, a_pred = model_out
+            moe_aux = None
 
         # Target velocity: v = x_1 - x_0 = clean - noise
         v_target = v_latent_clean - v_noise
@@ -96,6 +101,11 @@ class FlowMatching(nn.Module):
         audio_loss = F.mse_loss(a_pred, a_target)
 
         loss = self.video_weight * video_loss + self.audio_weight * audio_loss
+
+        # Add MoE auxiliary losses
+        if moe_aux is not None:
+            for k, v in moe_aux.items():
+                loss = loss + v
 
         result = {
             "loss": loss,
@@ -210,12 +220,12 @@ class FlowMatching(nn.Module):
 
             if use_cfg:
                 # Conditional prediction
-                v_cond, a_cond = model(
+                v_cond, a_cond, *_ = model(
                     z_v, z_a, t_tensor, text_emb,
                     first_frame_mask=first_frame_mask,
                 )
                 # Unconditional prediction
-                v_uncond, a_uncond = model(
+                v_uncond, a_uncond, *_ = model(
                     z_v, z_a, t_tensor, null_text_emb,
                     first_frame_mask=first_frame_mask,
                 )
@@ -223,7 +233,7 @@ class FlowMatching(nn.Module):
                 v_pred = v_uncond + cfg_video * (v_cond - v_uncond)
                 a_pred = a_uncond + cfg_audio * (a_cond - a_uncond)
             else:
-                v_pred, a_pred = model(
+                v_pred, a_pred, *_ = model(
                     z_v, z_a, t_tensor, text_emb,
                     first_frame_mask=first_frame_mask,
                 )
@@ -242,18 +252,18 @@ class FlowMatching(nn.Module):
                 t_half_tensor = torch.full((B,), t_half, device=device)
 
                 if use_cfg:
-                    v_cond2, a_cond2 = model(
+                    v_cond2, a_cond2, *_ = model(
                         z_v_half, z_a_half, t_half_tensor, text_emb,
                         first_frame_mask=first_frame_mask,
                     )
-                    v_uncond2, a_uncond2 = model(
+                    v_uncond2, a_uncond2, *_ = model(
                         z_v_half, z_a_half, t_half_tensor, null_text_emb,
                         first_frame_mask=first_frame_mask,
                     )
                     v_pred2 = v_uncond2 + cfg_video * (v_cond2 - v_uncond2)
                     a_pred2 = a_uncond2 + cfg_audio * (a_cond2 - a_uncond2)
                 else:
-                    v_pred2, a_pred2 = model(
+                    v_pred2, a_pred2, *_ = model(
                         z_v_half, z_a_half, t_half_tensor, text_emb,
                         first_frame_mask=first_frame_mask,
                     )
