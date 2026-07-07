@@ -17,6 +17,7 @@ env/
 
 # ── Data (large files, not in git) ──────────────────────────────────
 data/
+!seedance/data/
 !data/manifests/
 data/manifests/*.csv
 data/manifests/*.json
