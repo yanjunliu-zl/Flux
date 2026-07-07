@@ -1,0 +1,79 @@
+# =============================================================================
+# DB-DiT 200B MoE — Matching Seedance 2.0 scale (200B–300B)
+# =============================================================================
+#
+# Architecture:
+#   dim=4096 | 48 layers | 32 heads | head_dim=128
+#   512 expert FFNs per layer (ratio=0.2, dim→819→dim)
+#   Top-4 routing + 1 shared expert (DeepSeek-style)
+#   CBGA at layers [12, 24, 36]
+#
+# Param breakdown:
+#   Dense (attn + AdaLN + embeds):  33.0B  (always active)
+#   MoE (512 experts × 48 layers): 166.5B  (expert FFNs)
+#   ─────────────────────────────────────
+#   Total (no T5):                 199.5B
+#   Total (with T5-XXL):           211B
+#   Activated per token:            35.9B  (18%)
+#   FLOPs saved vs dense:           82%
+#
+# HARDWARE:
+#   Minimum:  8× A100 80GB (FSDP FULL_SHARD + CPU offload)
+#   Recommended: 8× H100 80GB / 4× H200 141GB
+#   Single node with NVLink strongly recommended
+#
+# Launch:
+#   torchrun --nproc_per_node=8 scripts/train.py \
+#       --config configs/train/stage1_200b_moe.yaml
+#
+# Reference:
+#   36kr article (2026-07-07): Seedance 2.0 = 200B–300B params
+#   https://www.36kr.com/p/3885177884078083
+# =============================================================================
+
+model:
+  _target_: seedance.models.DBDiT
+
+  # ── Shared ────────────────────────────────────────────────────────────
+  dim: 4096
+  num_layers: 48
+  num_heads: 32
+  ffn_ratio: 2.0                   # Dense fallback; MoE overrides
+  qk_norm: true
+  dropout: 0.0
+
+  # ── MoE Configuration ─────────────────────────────────────────────────
+  moe:
+    enabled: true
+    num_experts: 512                # 512 expert FFNs per layer
+    top_k: 4                        # Activate top 4 per token
+    expert_dim_ratio: 0.2           # Expert hidden = dim × 0.2 (819)
+    shared_expert: true             # DeepSeek shared expert (always active)
+    router_z_loss_weight: 0.001
+    load_balance_weight: 0.01
+
+  # ── Cross-Modal Bridge (CBGA) ─────────────────────────────────────────
+  cbga_layers: [12, 24, 36]
+  cbga_gate_warmup_steps: 50000
+
+  # ── Vision Branch ─────────────────────────────────────────────────────
+  video:
+    patch_size: [1, 2, 2]
+    latent_channels: 16
+    rope_theta: 10000
+    rope_dim_t: 42
+    rope_dim_h: 43
+    rope_dim_w: 43
+
+  # ── Audio Branch ──────────────────────────────────────────────────────
+  audio:
+    patch_size: [1, 4]
+    latent_channels: 8
+    rope_theta: 10000
+
+  # ── Text Encoder ──────────────────────────────────────────────────────
+  text:
+    encoder: "google/t5-v1_1-xxl"
+    dim_t5: 4096
+    max_length: 226
+    pooled: false
