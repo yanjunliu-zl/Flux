@@ -89,6 +89,7 @@ t5 = [
     "sentencepiece>=0.2.0",
     "protobuf>=4.25.0",
 ]
+deepspeed = ["deepspeed>=0.16.0"]
 
 [dependency-groups]
 dev = [

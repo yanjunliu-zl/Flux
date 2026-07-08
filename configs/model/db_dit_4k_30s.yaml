@@ -1,0 +1,72 @@
+# =============================================================================
+# DB-DiT 4K 30s — Seedance 2.5 scale: native 4K, 30-second output
+# =============================================================================
+#
+# Key architectural changes for 4K 30s:
+#   1. Block Sparse Temporal Attention (O(T×W) instead of O(T²))
+#   2. NTK-aware Temporal RoPE (extends 32fr training → 128fr inference)
+#   3. Shift-Window attention cycles across layers
+#   4. Larger latent token count: 128 frames × 32×32 spatial = 131K tokens
+#
+# Training: standard 32fr @ 256px (Stage 1-4)
+# Inference: cascaded 256→4K, 32→128fr via NTK RoPE + sparse attention
+#
+# Hardware (inference, cascaded pipeline, bf16):
+#   Coarse stage (32fr, 256px): 1× A100 80GB
+#   Temporal extension:         1× A100 80GB (sparse attention)
+#   Spatial SR (256→4K):        2× A100 80GB (tiled upsampling)
+#   ─────────────────────────────────────────
+#   Total inference: ~3 minutes for 4K 30s
+# =============================================================================
+
+model:
+  _target_: seedance.models.DBDiT
+
+  # ── Shared ────────────────────────────────────────────────────────────
+  dim: 4096
+  num_layers: 32
+  num_heads: 32
+  ffn_ratio: 4.0
+  qk_norm: true
+  dropout: 0.0
+
+  # ── Long-Sequence Support ─────────────────────────────────────────────
+  temporal:
+    # Block sparse attention for temporal dimension
+    use_sparse_attention: true
+    sparse_window_size: 8           # ±8 frames = 17-frame local window
+    num_global_tokens: 4            # First/last 2 frames as global
+    shift_window: true              # Swin-style alternating shift
+    sparse_threshold: 32            # Use sparse when T > 32 frames
+
+    # NTK-aware RoPE for long-sequence inference
+    ntk_enabled: true
+    ntk_alpha: 8.0
+    max_train_frames: 32
+    inference_frames: 128           # 30s @ 30fps → T/4 = 128 latent frames
+
+  # ── Cross-Modal Bridge (CBGA) ─────────────────────────────────────────
+  cbga_layers: [8, 16, 24]
+  cbga_gate_warmup_steps: 50000
+
+  # ── Vision Branch ─────────────────────────────────────────────────────
+  video:
+    patch_size: [1, 2, 2]
+    latent_channels: 16
+    rope_theta: 10000
+    rope_dim_t: 42
+    rope_dim_h: 43
+    rope_dim_w: 43
+
+  # ── Audio Branch ──────────────────────────────────────────────────────
+  audio:
+    patch_size: [1, 4]
+    latent_channels: 8
+    rope_theta: 10000
+
+  # ── Text Encoder ──────────────────────────────────────────────────────
+  text:
+    encoder: "google/t5-v1_1-xxl"
+    dim_t5: 4096
+    max_length: 226
+    pooled: false
