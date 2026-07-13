@@ -21,7 +21,7 @@ training:
   # Data
   data:
     _target_: seedance.data.VideoDataset
-    manifest_path: "data/manifests/train_stage1.csv"
+    manifest_path: "data/manifests/train_all.csv"
     resolution: 256
     num_frames: 32
     frame_stride: 1
@@ -75,6 +75,14 @@ training:
     type: "flow_matching"
     logit_normal_mean: 0.0
     logit_normal_std: 1.0
+
+  # World model (VideoWorld 2): pure visual self-supervision
+  world_model:
+    enabled: false            # Future prediction + temporal consistency loss
+    cross_scale_attn: false   # Cross-scale causal attention in temporal layers
+    pred_weight: 1.0
+    temporal_weight: 0.5
+    physics_weight: 0.1
 
   # Logging
   logging:

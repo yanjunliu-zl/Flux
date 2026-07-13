@@ -43,11 +43,14 @@ class VisionBranchBlock(nn.Module):
         qk_norm: bool = True,
         dropout: float = 0.0,
         moe_config: dict | None = None,
+        use_cross_scale: bool = False,
+        cross_scale_scales: int = 3,
     ):
         super().__init__()
         if context_dim is None:
             context_dim = dim
         self.dim = dim
+        self.use_cross_scale = use_cross_scale
 
         # Spatial self-attention
         self.adaln_spatial = AdaLN(dim, cond_dim)
@@ -55,11 +58,19 @@ class VisionBranchBlock(nn.Module):
             dim, num_heads, qk_norm=qk_norm, dropout=dropout
         )
 
-        # Temporal self-attention
+        # Temporal self-attention (standard or cross-scale)
         self.adaln_temporal = AdaLN(dim, cond_dim)
-        self.temporal_attn = MultiHeadAttention(
-            dim, num_heads, qk_norm=qk_norm, dropout=dropout
-        )
+        if use_cross_scale:
+            from seedance.models.db_dit.cross_scale_attention import ScalePyramid, CrossScaleCausalAttention
+            self.scale_pyramid = ScalePyramid(num_scales=cross_scale_scales, pool_mode="avg")
+            self.cross_scale_attn = CrossScaleCausalAttention(
+                dim=dim, num_heads=num_heads, num_scales=cross_scale_scales,
+                dropout=dropout,
+            )
+        else:
+            self.temporal_attn = MultiHeadAttention(
+                dim, num_heads, qk_norm=qk_norm, dropout=dropout
+            )
 
         # Cross-attention to text (K/V dim = context_dim, e.g. T5-base=768)
         self.adaln_cross = AdaLN(dim, cond_dim)
@@ -116,11 +127,19 @@ class VisionBranchBlock(nn.Module):
         attn_out = attn_out.reshape(B, T, H, W, D)
         x = x + gate.unsqueeze(1) * attn_out.reshape(B, N, D)
 
-        # 2. Temporal Self-Attention (cross-frame at same spatial position)
+        # 2. Temporal Self-Attention (standard or cross-scale causal)
         x_norm, shift, scale, gate = self.adaln_temporal(x, t_emb)
-        x_temporal = x_norm.reshape(B, T, H * W, D).permute(0, 2, 1, 3).reshape(B * H * W, T, D)
-        attn_out = self.temporal_attn(x_temporal)
-        attn_out = attn_out.reshape(B, H * W, T, D).permute(0, 2, 1, 3).reshape(B, N, D)
+        if self.use_cross_scale:
+            # Cross-scale: pyramid → multi-scale causal attn → finest scale
+            x_temp = x_norm.reshape(B, T, H * W, D).permute(0, 2, 1, 3).reshape(B * H * W, T, D)
+            pyramid = self.scale_pyramid(x_temp)
+            pyramid_out = self.cross_scale_attn(pyramid)
+            attn_out = pyramid_out[0]  # Finest scale
+            attn_out = attn_out.reshape(B, H * W, T, D).permute(0, 2, 1, 3).reshape(B, N, D)
+        else:
+            x_temporal = x_norm.reshape(B, T, H * W, D).permute(0, 2, 1, 3).reshape(B * H * W, T, D)
+            attn_out = self.temporal_attn(x_temporal)
+            attn_out = attn_out.reshape(B, H * W, T, D).permute(0, 2, 1, 3).reshape(B, N, D)
         x = x + gate.unsqueeze(1) * attn_out
 
         # 3. Cross-Attention to Text

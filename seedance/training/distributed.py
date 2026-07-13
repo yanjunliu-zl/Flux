@@ -68,7 +68,13 @@ def wrap_model(
 
     if world_size <= 1:
         if activation_checkpointing:
-            model.enable_gradient_checkpointing = lambda: None
+            # Apply gradient checkpointing manually for single GPU
+            # Without this, 32fr×256px×batch8 activations can hit 80GB+
+            from torch.utils.checkpoint import checkpoint
+            from seedance.models.db_dit.dual_branch_block import DualBranchBlock
+            for module in model.modules():
+                if isinstance(module, DualBranchBlock):
+                    module._grad_ckpt = True
         return model
 
     if use_fsdp:
