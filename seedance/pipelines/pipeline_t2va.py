@@ -82,13 +82,14 @@ class T2VAPipeline:
         pos_emb = self.text_encoder([prompt]).to(dtype=self.dtype)
         neg_emb = self.text_encoder([negative_prompt or ""]).to(dtype=self.dtype)
 
-        # Latent shapes
+        # Latent shapes — MUST match training pipeline (trainer.py preprocess)
+        # Training: raw (3,T,H,W) → bilinear resize to (3,T,H/8,W/8) → pad to (16,T,H/8,W/8)
         v_shape = (
             1,
-            self.vae_video.latent_channels,
-            max(1, num_frames // 4),
-            max(8, height // 8),
-            max(8, width // 8),
+            16,                        # 16 channels (3 RGB + 13 zeros — matches training pad)
+            num_frames,                # T: same as input frames (training doesn't compress temporally)
+            max(8, height // 8),       # H/8: matches bilinear downscale in training
+            max(8, width // 8),        # W/8
         )
         # Audio: compute shape compatible with patch_size (1, 4)
         # AudioVAE has ~8x temporal compression from mel frames
@@ -118,8 +119,16 @@ class T2VAPipeline:
             sampler=sampler,
         )
 
-        # Decode video only (audio branch not trained in Stage 1)
-        video_frames = self.vae_video.decode(v_latent)
+        # Reverse training preprocess: model output is in "fake latent" space
+        # Training did: pixels → bilinear downscale → pad 3→16 channels
+        # Reverse: take first 3 channels → bilinear upscale → pixels
+        v_latent = v_latent[:, :3]  # Take first 3 channels (RGB), drop 13 zero-pad channels
+        B, C, T, H_small, W_small = v_latent.shape
+        v_flat = v_latent.permute(0, 2, 1, 3, 4).reshape(B * T, C, H_small, W_small)
+        video_frames = torch.nn.functional.interpolate(
+            v_flat, size=(height, width), mode='bilinear', antialias=True,
+        )
+        video_frames = video_frames.reshape(B, T, C, height, width).permute(0, 2, 1, 3, 4)
         audio_waveform = None
 
         return video_frames, audio_waveform

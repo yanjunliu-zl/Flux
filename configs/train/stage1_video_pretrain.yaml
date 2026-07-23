@@ -21,7 +21,7 @@ training:
   # Data
   data:
     _target_: seedance.data.VideoDataset
-    manifest_path: "data/manifests/train_all.csv"
+    manifest_path: "data/manifests/train_balanced_train.csv"
     resolution: 256
     num_frames: 32
     frame_stride: 1
