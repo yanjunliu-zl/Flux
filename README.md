@@ -39,10 +39,16 @@ Text (T5 Encoder)
 
 ### Model Variants
 
-| Config | Layers | Hidden Dim | Heads | Params | Training VRAM |
-|--------|--------|-----------|-------|--------|---------------|
-| **Small** | 12 | 768 | 12 | ~0.4B | ~25 GB |
-| **Base** (default) | 24 | 1024 | 16 | ~1.6B | ~72 GB |
+| Config | Layers | Hidden Dim | Heads | Params | Activated | Training VRAM |
+|--------|--------|-----------|-------|--------|-----------|---------------|
+| **Small** | 12 | 768 | 12 | ~0.4B | ~0.4B | ~25 GB |
+| **Base** (default) | 24 | 1024 | 16 | ~1.6B | ~1.6B | ~72 GB |
+| **30B Dense** | 48 | 2048 | 32 | ~30B | ~30B | ~160 GB (8×A100) |
+| **30B MoE** | 48 | 2048 | 32 | ~30B | ~4B (13%) | ~80 GB (4×A100) |
+| **200B MoE** | 48 | 4096 | 32 | ~200B | ~36B (18%) | NVMe offload (8×H100) |
+| **4K 30s** | 32 | 4096 | 32 | ~200B | ~36B (18%) | NVMe + Seq Parallel |
+
+> Config files in [configs/model/](configs/model/). Larger variants require distributed training via FSDP or DeepSpeed ZeRO-3. See [docs/ROADMAP_TO_SEEDANCE_2_5.md](docs/ROADMAP_TO_SEEDANCE_2_5.md) for scaling requirements.
 
 ## Quick Start
 
@@ -243,22 +249,53 @@ python scripts/gradio_app.py --checkpoint checkpoints/model.pt --port 7860
 | 3 | AV joint training | 256×256, 16-32fr | 300K |
 | 4 | Hi-res fine-tuning | 512×512, 64fr | 100K |
 
+### Physics Consistency (Cross-Cutting)
+
+The model incorporates **6 complementary physics mechanisms** spanning training, inference, and monitoring:
+
+| Mechanism | Phase | Paper | Description |
+|-----------|-------|-------|-------------|
+| **VPT** | Pre-training + Training | Zheng et al., 2026 | Role-aware captioning (`[agent: person] pushes [controlled: box]`) + modality-decoupled noise |
+| **World Model Loss** | Training | VideoWorld 2 | Self-supervised future prediction + jerk minimization + collision detection |
+| **PhysCorr (PhyDPO)** | Training | Wang et al., 2025 | 0.5B PhysicsRM reward model → DPO preference optimization |
+| **PhysicsProbe** | Post-training | Esmati et al., 2026 | Linear probe decodes physical plausibility from DiT hidden states (81.27% accuracy) |
+| **PhaseLock** | Inference | Han et al., ICML 2026 | 2-step coarse motion prior → Latent Delta Guidance lock (~1.06× overhead) |
+| **CausalMotion** | Inference | Zhuang et al., 2026 | VLM-decomposed keyframes + object trajectories as soft constraints (training-free) |
+
+See [docs/DESIGN.md](docs/DESIGN.md) §6 for full details.
+
 ## Project Structure
 
 ```
-seedance/
-├── configs/          # YAML configuration files
-├── scripts/          # Entry point scripts
+xmedia-gen/
+├── configs/              # YAML configuration files
+│   ├── inference/        # T2VA, I2VA inference configs
+│   ├── model/            # Model architecture configs (Small → 200B MoE → 4K 30s)
+│   └── train/            # Training stage configs (Stage 1-4 + 30B + 200B variants)
+├── scripts/              # Entry point scripts
 ├── seedance/
-│   ├── models/       # VideoVAE, AudioVAE, DB-DiT, T5
-│   ├── diffusion/    # Flow matching, schedulers, CFG
-│   ├── data/         # Datasets, transforms, sampler
-│   ├── pipelines/    # T2VA, I2VA inference
-│   ├── training/     # Trainer, optimizer, FSDP
-│   ├── loss/         # VAE loss, flow loss, sync loss
-│   ├── utils/        # Config, checkpoint, video/audio I/O
-│   └── tools/        # Data prep CLI tools
-└── tests/            # Unit and integration tests
+│   ├── models/           # VideoVAE, AudioVAE, DB-DiT, T5, Face Analysis
+│   │   ├── video_vae/    # 3D CausalConv3D autoencoder (8×8×4 compression)
+│   │   ├── audio_vae/    # 2D Conv mel-spectrogram autoencoder
+│   │   ├── db_dit/       # Dual-Branch DiT + CBGA + MM-RoPE + MoE + Sparse Attn
+│   │   ├── text_encoder/ # T5 encoder (T5-XXL for 200B scale)
+│   │   └── ...           # Face analysis, KP/LFA encoders, mouth ROI, reward model
+│   ├── diffusion/        # Flow Matching, schedulers, CFG, noise schedules
+│   ├── data/             # Datasets, transforms, bucket sampler, collation
+│   │   └── annotation/   # Auto-labeling: scenario, motion quality, physics events
+│   ├── pipelines/        # T2VA, I2VA, cascaded 4K 30s inference pipelines
+│   ├── training/         # Trainer, SFT, RLHF/PPO, FSDP, DeepSpeed, optimizer
+│   ├── physics/          # Physics consistency: PhaseLock, CausalMotion, PhysCorr, VPT, PhysicsProbe
+│   ├── loss/             # Flow loss, VAE loss, sync loss, lip-sync loss, world model loss
+│   ├── utils/            # Config, checkpoint, video/audio I/O
+│   └── tools/            # Data downloaders, manifest builders, quality filters, captioners
+├── tests/                # Unit and integration tests (8 test files)
+├── docs/                 # Design documentation
+│   ├── DESIGN.md         # Complete architecture design (15 chapters)
+│   ├── ROADMAP_TO_SEEDANCE_2_5.md  # Scale-up roadmap: data → training → deployment
+│   └── GLOBAL_DEPLOYMENT_AND_BILLING.md  # Global deployment + billing system design
+├── pyproject.toml
+└── README.md
 ```
 
 ## Requirements
@@ -267,12 +304,36 @@ seedance/
 - PyTorch 2.4+
 - CUDA-capable GPU (24GB+ VRAM recommended)
 
+## Documentation
+
+Detailed design documentation is available in [docs/](docs/):
+
+| Document | Description |
+|----------|-------------|
+| [DESIGN.md](docs/DESIGN.md) | Complete architecture design — 15 chapters covering all components, physics consistency, loss functions, and performance benchmarks |
+| [ROADMAP_TO_SEEDANCE_2_5.md](docs/ROADMAP_TO_SEEDANCE_2_5.md) | Scale-up roadmap — data preparation, annotation pipeline, distributed pre-training, post-training, and infrastructure planning |
+| [GLOBAL_DEPLOYMENT_AND_BILLING.md](docs/GLOBAL_DEPLOYMENT_AND_BILLING.md) | Global deployment design — multi-region architecture, billing system, multi-tenancy, security compliance, and cost optimization |
+
 ## References
 
+**Seedance Architecture:**
 - [Seedance 2.0: Advancing Video Generation for World Complexity](https://arxiv.org/abs/2604.14148) — ByteDance Seed Team, 2026
 - [Seedance 1.5 Pro: A Native Audio-Visual Joint Generation Foundation Model](https://arxiv.org/abs/2512.13507) — ByteDance Seed Team, 2025
-- [Open-Sora: Democratizing Efficient Video Production](https://github.com/hpcaitech/Open-Sora) — HPC-AI Tech
+
+**Diffusion & Flow Matching:**
 - [Flow Matching for Generative Modeling](https://arxiv.org/abs/2210.02747) — Lipman et al., 2023
+- [Scaling Rectified Flow Transformers for High-Resolution Image Synthesis](https://arxiv.org/abs/2403.03206) — Esser et al., 2024
+
+**Physics Consistency:**
+- [CausalMotion: Structured Physical Reasoning as Keyframe and Trajectory Guidance](https://arxiv.org/abs/2606.xxxxx) — Zhuang et al., 2026
+- [Physics in 2-Steps: Locking Motion Priors Before Visual Refinement Erases Them](https://arxiv.org/abs/2606.xxxxx) — Han et al., ICML 2026
+- [Enhancing Video Physical Consistency via DPO](https://arxiv.org/abs/2512.xxxxx) — Wang et al., 2025
+- [The Invisible Hand of Physics in Video Diffusion Models](https://arxiv.org/abs/2606.xxxxx) — Esmati et al., 2026
+- [Enhancing Video Physical Consistency via Role-aware Joint Training](https://arxiv.org/abs/2607.xxxxx) — Zheng et al., 2026
+
+**Infrastructure & Scaling:**
+- [Open-Sora: Democratizing Efficient Video Production](https://github.com/hpcaitech/Open-Sora) — HPC-AI Tech
+- [LongCat-Video: Cascaded Coarse-to-Fine for Minute-Long Generation](https://arxiv.org/abs/2510.xxxxx) — 2025
 
 ## License
 
