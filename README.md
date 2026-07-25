@@ -67,102 +67,179 @@ uv sync --group dev --extra flash-attn --extra tools --extra t5
 
 ### Data Preparation
 
-#### VoxCeleb2 (Talking Faces)
+The training data pipeline is designed to produce a **balanced, caption-rich** dataset
+with diverse human portraits, talking faces, and general visual scenes.
 
-VoxCeleb2 is the primary pretraining dataset, containing ~1.1M talking-face video clips
-from 5,994 speakers. The official dataset requires registration at
-[robots.ox.ac.uk/~vgg/data/voxceleb/](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/).
+#### Overview
 
-After downloading, you will have a **multi-part zip archive** (`vox2_dev_mp4_partaa` through `partai`,
-~249 GB total) and a text annotations zip (`vox2_dev_txt.zip`, ~1.5 GB). These use `store`
-compression (no actual compression), so you need ~250 GB free space for extraction.
+```
+┌─────────────────┐   ┌───────────────┐   ┌──────────────┐   ┌─────────────┐
+│ 1. Download      │──▶│ 2. Filter     │──▶│ 3. Caption   │──▶│ 4. Build     │
+│    per-source    │   │    quality    │   │    VLM/template│   │    manifest  │
+└─────────────────┘   └───────────────┘   └──────────────┘   └─────────────┘
+```
+
+Final training manifest: **36k videos** with **13k unique captions**, 75% high-quality faces.
+
+---
+
+#### Step 1: Download Data Sources
+
+Each source is downloaded independently via dedicated tools in `seedance/tools/` and `scripts/`.
+
+**1a. CelebA-HQ (30,000 high-res face images — primary source)**
 
 ```bash
-# 1. Install 7-Zip for split archive handling (Windows)
-winget install 7zip.7zip
+# Download from HuggingFace (requires proxy setup if in mainland China)
+# Model: Ryan-sjtu/celebahq-caption (images + captions in parquet format)
+export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897
+hf download --repo-type dataset Ryan-sjtu/celebahq-caption --local-dir data/celeba_hq
 
-# 2. Extract text annotations (~1.1M utterances → data/voxceleb2/txt/)
-7z x data/voxceleb2/vox2_dev_txt.zip -odata/voxceleb2/ -y
-
-# 3. Extract video split archives (~1.1M clips → data/voxceleb2/dev/mp4/)
-#    7z auto-detects all 9 parts (partaa → partai)
-7z x data/voxceleb2/dev_archives/vox2_dev_mp4_partaa -odata/voxceleb2/ -y
+# Extract parquet → pseudo-videos with subtle crop jitter for motion tolerance
+python scripts/extract_celeba_hq.py
+# Output: 30,000 pseudo-videos (32f, 256×256, 3.4 GB)
+# Manifest: data/manifests/celeba_hq_train.csv (28,500 train + 1,500 val)
 ```
 
-Extracted structure:
-```
-data/voxceleb2/
-  dev/mp4/
-    id00012/               ← speaker ID
-      21Uxsk56VDQ/          ← YouTube video ID
-        00001.mp4           ← individual clip (224×224, 25fps, ~3-15s)
-        00002.mp4
-        ...
-  txt/
-    id00012/
-      21Uxsk56VDQ/
-        00001.txt           ← text annotation per clip
-        ...
-```
-
-After successful extraction, the original split archives can be safely deleted to
-free ~250 GB:
+**1b. Pexels (stock footage)**
 
 ```bash
-rm -rf data/voxceleb2/dev_archives/
-rm data/voxceleb2/vox2_dev_txt.zip
+python -m seedance.tools.download_pexels \
+    --categories people,animals,city,food,nature,tech,travel \
+    --output data/pexels_raw/ \
+    --max_per_category 200
+
+# Quality filter: resolution ≥ 360p, duration 2-120s, optical flow 0.05-8.0
+python -m seedance.tools.quality_filter \
+    --input data/pexels_raw/ \
+    --output data/pexels_filtered/ \
+    --min_height 360 --min_duration 2.0 --max_duration 120
 ```
 
-#### Manifest Generation
-
-Generate a CSV manifest with full OpenCV metadata (frame count, resolution, FPS) for all
-clips, plus SCRFD face detection on the first 500 samples:
+**1c. WebVid (10M web videos with captions)**
 
 ```bash
-python -m flux.tools.ingest_talking_data \
+python -m seedance.tools.download_webvid \
+    --num_videos 10000 --output data/webvid/
+
+# Quality filter
+python -m seedance.tools.quality_filter \
+    --input data/webvid/videos/ \
+    --output data/webvid_filtered/
+```
+
+**1d. Bilibili (Chinese video platform — portrait/fashion content)**
+
+```bash
+# Download portrait/fashion videos by keyword search
+python scrapers/bilibili_download.py \
+    --tags "街拍穿搭,近距离人像,原相机拍摄,半身人像,自然光人像,生活vlog,少女写真" \
+    --output data/people_bilibili \
+    --max 3000 --workers 4
+
+# Quality filter with optical flow
+python -m seedance.tools.quality_filter \
+    --input data/people_bilibili \
+    --output data/people_bilibili_filtered \
+    --min_height 360 --max_duration 120
+```
+
+**1e. VoxCeleb2 (talking faces, ~1.1M clips)**
+
+Download from [robots.ox.ac.uk/~vgg/data/voxceleb/](https://www.robots.ox.ac.uk/~vgg/data/voxceleb/).
+Extract with 7-Zip, then generate manifest:
+
+```bash
+python -m seedance.tools.ingest_talking_data \
     --input_dir data/voxceleb2/dev/mp4/ \
     --dataset voxceleb \
     --output data/manifests/voxceleb_manifest.csv
-# Output: 1,092,009 entries, 212 MB, ~2 hours
 ```
 
-#### Merging All Data Sources
+---
 
-Stage 1 (video pretraining) benefits from data diversity. Merge all available sources —
-VoxCeleb2, Pexels/WebVid, HDTF — into a single manifest:
+#### Step 2: VLM Captioning (Qwen2-VL)
+
+Template captions ("A person speaking") don't teach the model text-to-content
+mapping. Real descriptive captions from a vision-language model (VLM) do.
+
+**Which videos need captioning:** Any video without a real descriptive caption —
+pexels_people, bilibili_people, filtered_people. WebVid videos have Shutterstock
+captions already. CelebA-HQ comes with captions.
 
 ```bash
-python -c "
-import csv, os
+# Install Qwen2-VL dependencies (in project venv)
+.venv/bin/python -m ensurepip
+.venv/bin/python -m pip install qwen-vl-utils
 
-manifests = [
-    'data/manifests/voxceleb_manifest.csv',
-    'data/manifests/pexels_webvid_annotated.csv',
-    'data/manifests/hdtf_manifest.csv',
-]
-columns = ['video_path','num_frames','height','width','fps','duration_s',
-           'audio_path','caption_short','caption_long','caption_audio','speaker_id','dataset']
-
-with open('data/manifests/train_stage1.csv','w',newline='',encoding='utf-8') as out:
-    w = csv.DictWriter(out, fieldnames=columns, extrasaction='ignore')
-    w.writeheader()
-    for m in manifests:
-        if os.path.exists(m):
-            for row in csv.DictReader(open(m,'r',encoding='utf-8')):
-                if os.path.exists(row.get('video_path','')):
-                    w.writerow(row)
-"
-# Result: 1,093,167 videos, 209 MB
+# Run captioning (requires ~15 GB GPU memory for Qwen2-VL-2B)
+export https_proxy=http://127.0.0.1:7897 http_proxy=http://127.0.0.1:7897
+.venv/bin/python scripts/caption_videos_vlm.py \
+    --model Qwen/Qwen2-VL-2B-Instruct \
+    --input data/pexels_people/ data/people_bilibili_filtered/ data/filtered/people/ \
+    --output data/manifests/vlm_captions.json \
+    --num_frames 4 \
+    --resume
 ```
 
-#### Data Summary
+**How it works:**
+1. Sample 4 evenly-spaced frames per video, resize to max 448px
+2. Feed to Qwen2-VL-2B with a structured prompt asking for person description
+3. Each video takes ~0.6s, ~10 minutes for 1,000 videos
+4. Output saved to `vlm_captions.json`, auto-resume on failure
 
-| Dataset | Videos | Size | Description |
-|---------|--------|------|-------------|
-| VoxCeleb2 | 1,092,009 | 254 GB | Talking faces, 5,994 speakers, 224×224 |
-| WebVid/Pexels | 2,865 / 786 | ~5 GB | General web videos, stock footage |
-| HDTF | 372 | 5.8 GB | High-res talking faces |
-| **Total** | **1,093,167** | **~265 GB** | |
+**Caption quality examples:**
+
+| Before (template) | After (VLM) |
+|---|---|
+| "a young woman walking in a bright room, well-composed" | "A young woman with long brown hair smiling at the camera in soft natural window light, medium close-up portrait" |
+| "A person sitting in a contemporary setting" | "A young man with short black hair and a beard, wearing a black tank top and blue jeans, sitting in a cafe with a window in the background" |
+
+> **Model choice:** `Qwen/Qwen2-VL-2B-Instruct` (~4 GB) for speed. Swap to
+> `Qwen/Qwen2-VL-7B-Instruct` (~14 GB) for higher quality captions.
+>
+> **Alternative:** For production-scale captioning, consider
+> [CogVLM2-Video](https://huggingface.co/THUDM/cogvlm2-video-llama3-chat)
+> which understands temporal dynamics better (but requires ~40 GB GPU memory).
+
+---
+
+#### Step 3: Build Balanced Training Manifest
+
+The manifest builder merges all sources into a single train/val split with
+controlled proportions.
+
+```bash
+python scripts/build_balanced_manifest.py \
+    --vox_count 3000 \       # VoxCeleb2: limit to 3k (from 1.1M)
+    --general_count 1500 \    # General non-people videos
+    --output data/manifests/train_balanced.csv
+```
+
+**What it does:**
+1. Loads all video directories, parquet manifests, and VLM captions
+2. VLM captions take priority over template captions (auto-detected)
+3. Downsamples VoxCeleb2 to `--vox_count` (default 15,000)
+4. Adds all people-related videos (CelebA-HQ, pexels_people, bilibili_people, webvid_people)
+5. Adds general scenes (WebVid, Pexels categories) for visual diversity
+6. Shuffles and splits into train/val (95/5 default)
+
+---
+
+#### Final Training Data Composition
+
+| Data Source | Videos | % | Resolution | Caption Source | Description |
+|-------------|--------|---|-----------|----------------|-------------|
+| **CelebA-HQ** | 27,061 | 75.2% | 256×256 | Original (8.4k unique) | High-res face portraits |
+| WebVid people | 3,051 | 8.5% | 596×336 | Shutterstock | General people scenes |
+| VoxCeleb2 | 2,867 | 8.0% | 224×224 | 14 diverse templates | Talking faces (downsampled) |
+| Bilibili people | 554 | 1.5% | 720×1280 | **Qwen2-VL** | Portrait/fashion videos |
+| pexels_people | 162 | 0.5% | 1080p-4K | **Qwen2-VL** | High-res people stock |
+| General + animation | ~2,296 | 6.3% | Mixed | Shutterstock / templates | Visual diversity |
+| **Total** | **~36,000** | **100%** | | **13k unique captions** | |
+
+> See [scripts/build_balanced_manifest.py](scripts/build_balanced_manifest.py) for
+> full configuration options and `--help` for usage.
 
 ### Training
 
