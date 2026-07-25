@@ -226,6 +226,13 @@ def build_balanced_manifest(
     rng = random.Random(seed)
     captions_db = load_captions()
     webvid_meta = load_webvid_metadata()
+    # Load VLM captions if available (takes priority over template captions)
+    vlm_captions_file = DATA_DIR / "manifests" / "vlm_captions.json"
+    vlm_captions = {}
+    if vlm_captions_file.exists():
+        with open(vlm_captions_file, "r", encoding="utf-8") as f:
+            vlm_captions = json.load(f)
+        print(f"[vlm_captions] Loaded {len(vlm_captions)} VLM captions")
     print(f"[webvid_meta] Loaded {len(webvid_meta)} captions from WebVid metadata")
 
     all_rows: list[dict] = []
@@ -252,7 +259,12 @@ def build_balanced_manifest(
         cap_short = cap.get("caption_short", "")
         cap_long = cap.get("caption_long", "")
 
-        if not cap_short or re.match(r"A \d+s video at \d+x\d+", cap_short):
+        # Use VLM caption if available, else check existing, else template
+        vlm = vlm_captions.get(name, {})
+        if vlm.get("caption_short"):
+            cap_short = vlm["caption_short"]
+            cap_long = vlm.get("caption_long", cap_short)
+        elif not cap_short or re.match(r"A \d+s video at \d+x\d+", cap_short):
             cap_short = generate_people_caption(seed * 1000 + i)
             cap_long = cap_short
 
@@ -281,7 +293,11 @@ def build_balanced_manifest(
         cap_short = cap.get("caption_short", "")
         cap_long = cap.get("caption_long", "")
 
-        if not cap_short or re.match(r"A \d+s video at \d+x\d+", cap_short):
+        vlm = vlm_captions.get(name, {})
+        if vlm.get("caption_short"):
+            cap_short = vlm["caption_short"]
+            cap_long = vlm.get("caption_long", cap_short)
+        elif not cap_short or re.match(r"A \d+s video at \d+x\d+", cap_short):
             cap_short = generate_people_caption(seed * 2000 + i)
             cap_long = cap_short
 
@@ -298,7 +314,44 @@ def build_balanced_manifest(
         stats["filtered_people"] += 1
 
     # ═══════════════════════════════════════════════════════════════════════
-    # 2b. BILIBILI_PEOPLE — downloaded portrait/human videos from Bilibili
+    # 2c. CELEBA_HQ — 30,000 high-res face pseudo-videos with real captions
+    # ═══════════════════════════════════════════════════════════════════════
+    celeba_manifest = DATA_DIR / "manifests" / "celeba_hq_train.csv"
+    if celeba_manifest.exists():
+        celeba_added = 0
+        with open(celeba_manifest, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                name = Path(row["video_path"]).name
+                if name in already_added:
+                    continue
+                # Verify file exists
+                video_path = PROJECT_DIR / row["video_path"]
+                if not video_path.exists():
+                    continue
+                all_rows.append({
+                    "video_path": row["video_path"],
+                    "num_frames": int(row["num_frames"]),
+                    "height": int(row["height"]),
+                    "width": int(row["width"]),
+                    "fps": float(row["fps"]),
+                    "duration_s": float(row["duration_s"]),
+                    "audio_path": row.get("audio_path", ""),
+                    "caption_short": row["caption_short"],
+                    "caption_long": row["caption_long"],
+                    "caption_audio": row.get("caption_audio", ""),
+                    "speaker_id": "",
+                    "dataset": "celeba_hq",
+                })
+                already_added.add(name)
+                celeba_added += 1
+        print(f"[celeba_hq] Added {celeba_added} videos (from {celeba_manifest})")
+        stats["celeba_hq"] = celeba_added
+    else:
+        print(f"[celeba_hq] Manifest not found, run: python scripts/extract_celeba_hq.py")
+
+    # ═══════════════════════════════════════════════════════════════════════
+    # 2d. BILIBILI_PEOPLE — downloaded portrait/human videos from Bilibili
     # ═══════════════════════════════════════════════════════════════════════
     bili_people_dirs = [
         DATA_DIR / "people_bilibili_filtered",
@@ -316,12 +369,18 @@ def build_balanced_manifest(
         name = v["file_name"]
         if name in already_added:
             continue
-        cap_short = generate_people_caption(seed * 5000 + i)
+        vlm = vlm_captions.get(name, {})
+        if vlm.get("caption_short"):
+            cap_short = vlm["caption_short"]
+            cap_long = vlm.get("caption_long", cap_short)
+        else:
+            cap_short = generate_people_caption(seed * 5000 + i)
+            cap_long = cap_short
         all_rows.append({
             **v,
             "audio_path": "",
             "caption_short": cap_short,
-            "caption_long": cap_short,
+            "caption_long": cap_long,
             "caption_audio": "",
             "speaker_id": "",
             "dataset": "bilibili_people",
