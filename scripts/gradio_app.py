@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import torch
 import gradio as gr
 
-from seedance.models import VideoVAE, AudioVAE, DBDiT, T5Encoder
-from seedance.pipelines import T2VAPipeline, I2VAPipeline
+from flux.models import VideoVAE, AudioVAE, DBDiT, T5Encoder
+from flux.pipelines import T2VAPipeline, I2VAPipeline
 
 
 def create_demo(

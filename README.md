@@ -1,4 +1,4 @@
-# 🎬 xMedia-Gen 2.0
+# 🎬 Flux
 
 **Dual-Branch Diffusion Transformer for Native Audio-Video Joint Generation**
 
@@ -119,7 +119,7 @@ Generate a CSV manifest with full OpenCV metadata (frame count, resolution, FPS)
 clips, plus SCRFD face detection on the first 500 samples:
 
 ```bash
-python -m seedance.tools.ingest_talking_data \
+python -m flux.tools.ingest_talking_data \
     --input_dir data/voxceleb2/dev/mp4/ \
     --dataset voxceleb \
     --output data/manifests/voxceleb_manifest.csv
@@ -170,7 +170,7 @@ with open('data/manifests/train_stage1.csv','w',newline='',encoding='utf-8') as 
 
 ```bash
 # Single GPU
-python -m seedance.training --config configs/train/stage1_video_pretrain.yaml
+python -m flux.training --config configs/train/stage1_video_pretrain.yaml
 
 # Single-node multi-GPU (auto-detect)
 bash scripts/train.sh configs/train/stage1_video_pretrain.yaml 8
@@ -182,23 +182,23 @@ bash scripts/train.sh configs/train/stage1_video_pretrain.yaml 8 2 1 192.168.1.1
 # Raw torchrun
 torchrun --nproc_per_node=8 --nnodes=2 --node_rank=0 \
     --master_addr=192.168.1.10 --master_port=29500 \
-    -m seedance.training --config configs/train/stage1_video_pretrain.yaml
+    -m flux.training --config configs/train/stage1_video_pretrain.yaml
 ```
 
 #### Stages
 
 ```bash
 # Stage 1: Video-only pretraining
-python -m seedance.training --config configs/train/stage1_video_pretrain.yaml
+python -m flux.training --config configs/train/stage1_video_pretrain.yaml
 
 # Stage 2: Audio-only pretraining
-python -m seedance.training --config configs/train/stage2_audio_pretrain.yaml
+python -m flux.training --config configs/train/stage2_audio_pretrain.yaml
 
 # Stage 3: Audio-Video joint training
-python -m seedance.training --config configs/train/stage3_av_joint.yaml
+python -m flux.training --config configs/train/stage3_av_joint.yaml
 
 # Stage 4: High-resolution fine-tuning
-python -m seedance.training --config configs/train/stage4_hires_finetune.yaml
+python -m flux.training --config configs/train/stage4_hires_finetune.yaml
 ```
 
 #### Distributed Architecture
@@ -267,13 +267,13 @@ See [docs/DESIGN.md](docs/DESIGN.md) §6 for full details.
 ## Project Structure
 
 ```
-xmedia-gen/
+flux/
 ├── configs/              # YAML configuration files
 │   ├── inference/        # T2VA, I2VA inference configs
 │   ├── model/            # Model architecture configs (Small → 200B MoE → 4K 30s)
 │   └── train/            # Training stage configs (Stage 1-4 + 30B + 200B variants)
 ├── scripts/              # Entry point scripts
-├── seedance/
+├── flux/
 │   ├── models/           # VideoVAE, AudioVAE, DB-DiT, T5, Face Analysis
 │   │   ├── video_vae/    # 3D CausalConv3D autoencoder (8×8×4 compression)
 │   │   ├── audio_vae/    # 2D Conv mel-spectrogram autoencoder

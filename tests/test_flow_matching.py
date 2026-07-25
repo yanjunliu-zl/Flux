@@ -3,9 +3,9 @@
 import torch
 import pytest
 
-from seedance.diffusion.flow_matching import FlowMatching
-from seedance.diffusion.noise_schedule import LogitNormalSchedule
-from seedance.models import DBDiT
+from flux.diffusion.flow_matching import FlowMatching
+from flux.diffusion.noise_schedule import LogitNormalSchedule
+from flux.models import DBDiT
 
 
 class TestFlowMatching:

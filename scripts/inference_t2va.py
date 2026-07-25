@@ -14,9 +14,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import torch
 
-from seedance.utils.config import load_config
-from seedance.models import VideoVAE, AudioVAE, DBDiT, T5Encoder
-from seedance.pipelines import T2VAPipeline
+from flux.utils.config import load_config
+from flux.models import VideoVAE, AudioVAE, DBDiT, T5Encoder
+from flux.pipelines import T2VAPipeline
 
 
 def build_model_from_config(model_config_path: str, device: torch.device, dtype: torch.dtype) -> DBDiT:

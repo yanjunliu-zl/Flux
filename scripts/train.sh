@@ -198,11 +198,11 @@ if [ "$NNODES" -gt 1 ] || [ "$GPUS_PER_NODE" -gt 1 ]; then
         --node_rank="$NODE_RANK" \
         --master_addr="$MASTER_ADDR" \
         --master_port="$MASTER_PORT" \
-        -m seedance.training \
+        -m flux.training \
         --config "$CONFIG"
 else
     # Single GPU
-    echo -e "  Launching: python -m seedance.training --config $CONFIG"
+    echo -e "  Launching: python -m flux.training --config $CONFIG"
     echo ""
-    python -m seedance.training --config "$CONFIG"
+    python -m flux.training --config "$CONFIG"
 fi

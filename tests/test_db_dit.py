@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import pytest
 
-from seedance.models import DBDiT
+from flux.models import DBDiT
 
 
 class TestDBDiT:

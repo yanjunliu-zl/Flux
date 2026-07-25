@@ -7,7 +7,7 @@ import numpy as np
 import cv2
 import pytest
 
-from seedance.data.annotation import (
+from flux.data.annotation import (
     PhysicsEventDetector,
     PhysicsEventType,
     detect_physics_events,

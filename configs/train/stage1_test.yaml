@@ -6,7 +6,7 @@ training:
   description: "Video-only pretraining TEST RUN"
 
   data:
-    _target_: seedance.data.VideoDataset
+    _target_: flux.data.VideoDataset
     manifest_path: "data/manifests/train.csv"
     resolution: 128          # Small frames
     num_frames: 8            # Few frames

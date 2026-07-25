@@ -19,7 +19,7 @@ training:
     audio_latent_channels: 8
 
   data:
-    _target_: seedance.data.AVDataset
+    _target_: flux.data.AVDataset
     manifest_path: "data/manifests/av_hires_train.csv"
     video:
       resolution: 512

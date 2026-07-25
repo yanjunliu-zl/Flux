@@ -2,7 +2,7 @@
 # 2D Conv Autoencoder for mel-spectrogram compression
 
 model:
-  _target_: seedance.models.AudioVAE
+  _target_: flux.models.AudioVAE
 
   # Mel-spectrogram parameters
   sample_rate: 16000

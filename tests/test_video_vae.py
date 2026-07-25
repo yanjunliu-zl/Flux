@@ -3,7 +3,7 @@
 import torch
 import pytest
 
-from seedance.models import VideoVAE
+from flux.models import VideoVAE
 
 
 class TestVideoVAE:

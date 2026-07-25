@@ -3,7 +3,7 @@
 import torch
 import pytest
 
-from seedance.models.db_dit.cross_modal_bridge import CBGABlock
+from flux.models.db_dit.cross_modal_bridge import CBGABlock
 
 
 class TestCBGA:

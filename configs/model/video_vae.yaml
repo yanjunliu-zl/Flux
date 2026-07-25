@@ -3,7 +3,7 @@
 # 8x spatial + 4x temporal compression = 256x total
 
 model:
-  _target_: seedance.models.VideoVAE
+  _target_: flux.models.VideoVAE
 
   # Input/Output
   in_channels: 3

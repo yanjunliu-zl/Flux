@@ -3,7 +3,7 @@
 import torch
 import pytest
 
-from seedance.models.db_dit.mm_rope import MMRoPE
+from flux.models.db_dit.mm_rope import MMRoPE
 
 
 class TestMMRoPE:

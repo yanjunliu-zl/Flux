@@ -3,14 +3,14 @@ requires = ["setuptools>=75.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "seedance"
+name = "flux"
 version = "2.0.0"
-description = "Seedance 2.0: Dual-Branch Diffusion Transformer for Native Audio-Video Joint Generation"
+description = "Flux: Dual-Branch Diffusion Transformer for Native Audio-Video Joint Generation"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
-    {name = "Seedance Contributors"},
+    {name = "TopoSeek Inc."},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -49,12 +49,12 @@ dependencies = [
 ]
 
 [project.scripts]
-seedance-train = "scripts.train:main"
-seedance-infer-t2va = "scripts.inference_t2va:main"
-seedance-infer-i2va = "scripts.inference_i2va:main"
+flux-train = "scripts.train:main"
+flux-infer-t2va = "scripts.inference_t2va:main"
+flux-infer-i2va = "scripts.inference_i2va:main"
 
 [tool.setuptools.packages.find]
-include = ["seedance*"]
+include = ["flux*"]
 
 # PyTorch CUDA index (cu128 = CUDA 12.8, compatible with 13.x drivers)
 [[tool.uv.index]]

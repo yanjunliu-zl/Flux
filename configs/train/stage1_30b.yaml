@@ -17,7 +17,7 @@ training:
 
   # Data
   data:
-    _target_: seedance.data.VideoDataset
+    _target_: flux.data.VideoDataset
     manifest_path: "data/manifests/train_stage1.csv"
     resolution: 256
     num_frames: 32

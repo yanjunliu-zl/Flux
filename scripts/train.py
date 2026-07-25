@@ -24,12 +24,12 @@ import torch
 from torch.utils.data import DataLoader
 from omegaconf import OmegaConf
 
-from seedance.utils.config import load_config
-from seedance.utils.logging import setup_logging
-from seedance.models import DBDiT, T5Encoder
-from seedance.data import VideoDataset, AudioDataset, AVDataset
-from seedance.data.collate import collate_video_batch, collate_audio_batch, collate_av_batch
-from seedance.training import Trainer, setup_distributed, wrap_model
+from flux.utils.config import load_config
+from flux.utils.logging import setup_logging
+from flux.models import DBDiT, T5Encoder
+from flux.data import VideoDataset, AudioDataset, AVDataset
+from flux.data.collate import collate_video_batch, collate_audio_batch, collate_av_batch
+from flux.training import Trainer, setup_distributed, wrap_model
 
 
 def build_dataset(config, stage: int):

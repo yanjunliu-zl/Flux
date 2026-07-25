@@ -1,48 +1,48 @@
-# 从 Seedance 2.0 到 2.5：规模化工程路线图
+# From Seedance 2.0 to 2.5: Engineering Roadmap for Scale
 
-> 本文分析将当前开源的 Seedance 2.0 参考实现推进到生产级 Seedance 2.5 水平所需要的工程工作，覆盖数据、标注、预训练、后训练、分布式部署和基础设施六大板块。
-
----
-
-## 1. 目标定义：Seedance 2.5 是什么
-
-Seedance 2.5 的能力基线：
-
-| 维度 | 2.0 (当前) | 2.5 (目标) |
-|------|-----------|-----------|
-| **模型规模** | 1.6B dense, 30B MoE 配置 | 200B MoE 主模型 + 级联子模型 |
-| **输出分辨率** | 256×256 训练, 512×512 微调 | 原生 4K (3840×2160) |
-| **输出时长** | 2-4 秒 (32fr @ 16fps) | 30 秒 (128fr latent @ 30fps) |
-| **输入条件** | 文本 / 单图 | 50 参考输入（多图+视频+音频+pose+深度） |
-| **训练数据** | ~110 万视频, ~265 GB | 10 亿+ 视频, PB 级 |
-| **训练算力** | 单节点 8×A100 | 千卡集群, 数万 GPU·时 |
-| **文本编码器** | T5-XXL (4.7B) | T5-XXL + 多模态编码器 |
-| **物理一致性** | 6 个机制原型 | 全链路生产化 |
+> This article analyzes the engineering work required to advance the current open-source Seedance 2.0 reference implementation to a production-grade Seedance 2.5 system, covering six areas: data, annotation, pre-training, post-training, distributed deployment, and infrastructure.
 
 ---
 
-## 2. 数据准备
+## 1. Target Definition: What Is Seedance 2.5
 
-### 2.1 数据规模
+Seedance 2.5 capability baseline:
 
-当前 VoxCeleb2 + WebVid + HDTF 约 110 万视频、265 GB，仅是概念验证规模。Seedance 2.5 需要：
+| Dimension | 2.0 (Current) | 2.5 (Target) |
+|-----------|--------------|--------------|
+| **Model Scale** | 1.6B dense, 30B MoE configs | 200B MoE main model + cascade sub-models |
+| **Output Resolution** | 256×256 training, 512×512 fine-tuning | Native 4K (3840×2160) |
+| **Output Duration** | 2-4s (32fr @ 16fps) | 30s (128fr latent @ 30fps) |
+| **Input Conditions** | Text / single image | 50 reference inputs (multi-image + video + audio + pose + depth) |
+| **Training Data** | ~1.1M videos, ~265 GB | 1B+ videos, PB-scale |
+| **Training Compute** | Single node 8×A100 | Thousand-GPU cluster, tens of thousands GPU·hours |
+| **Text Encoder** | T5-XXL (4.7B) | T5-XXL + multi-modal encoder |
+| **Physics Consistency** | 6 mechanism prototypes | Full pipeline productionized |
 
-| 数据类型 | 目标量级 | 来源 | 挑战 |
-|---------|---------|------|------|
-| **通用视频** | 5-10 亿条 | WebVid-10M, HD-VILA-100M, 内部爬虫 | 版权清洗、NSFW 过滤、去重 |
-| **高质量视频** | 500-1000 万条 | 库存视频 (Shutterstock 授权), 电影片段 | 版权许可、元数据标准化 |
-| **说话人脸** | 2000-5000 万条 | VoxCeleb2 + 扩展爬虫 + 播客视频 | 多语言覆盖、口音多样性 |
-| **物理交互** | 500-1000 万条 | IntPhys, Something-Something, 体育视频 | 物理标注难度、场景多样性 |
-| **4K 视频** | 100-500 万条 | 4K YouTube, 专业摄影素材 | 下载带宽、转码开销 |
-| **多模态配对** | 1000-3000 万条 | AudioSet, VGGSound, 内部 AV 数据 | 音视频对齐精度 |
+---
 
-### 2.2 数据爬取基础设施
+## 2. Data Preparation
 
-从零构建大规模视频爬虫系统：
+### 2.1 Data Scale
+
+The current VoxCeleb2 + WebVid + HDTF (~1.1M videos, 265 GB) is a proof-of-concept scale. Seedance 2.5 requires:
+
+| Data Type | Target Volume | Sources | Challenges |
+|-----------|-------------|---------|------------|
+| **General Videos** | 500M–1B clips | WebVid-10M, HD-VILA-100M, internal crawlers | Copyright cleaning, NSFW filtering, dedup |
+| **High-Quality Videos** | 5–10M clips | Stock footage (Shutterstock licensed), film clips | Copyright licensing, metadata standardization |
+| **Talking Faces** | 20–50M clips | VoxCeleb2 + expanded crawlers + podcast videos | Multi-language coverage, accent diversity |
+| **Physical Interactions** | 5–10M clips | IntPhys, Something-Something, sports footage | Physics annotation difficulty, scene diversity |
+| **4K Videos** | 1–5M clips | 4K YouTube, professional cinematography | Download bandwidth, transcoding overhead |
+| **Multi-modal Pairs** | 10–30M clips | AudioSet, VGGSound, internal AV data | Audio-video alignment precision |
+
+### 2.2 Crawling Infrastructure
+
+Building a large-scale video crawling system from scratch:
 
 ```
                            ┌─────────────┐
-                           │  URL 种子库  │
+                           │  URL Seed DB │
                            │  (YouTube,   │
                            │   Pexels,    │
                            │   TikTok...) │
@@ -51,7 +51,7 @@ Seedance 2.5 的能力基线：
                     ┌─────────────┼─────────────┐
                     ▼             ▼             ▼
               ┌──────────┐ ┌──────────┐ ┌──────────┐
-              │ yt-dlp   │ │ 自定义   │ │ API      │
+              │ yt-dlp   │ │ Custom   │ │ API      │
               │ Worker   │ │ Scraper  │ │ Worker   │
               │ (YouTube)│ │ (Web)    │ │ (Pexels) │
               └────┬─────┘ └────┬─────┘ └────┬─────┘
@@ -59,42 +59,44 @@ Seedance 2.5 的能力基线：
                    └────────────┼────────────┘
                                 ▼
                     ┌──────────────────────┐
-                    │   下载队列 (Redis)    │
-                    │   优先级: 质量>数量   │
+                    │   Download Queue      │
+                    │   (Redis)            │
+                    │   Priority: quality   │
+                    │   over quantity       │
                     └──────────┬───────────┘
                                ▼
                     ┌──────────────────────┐
-                    │  分布式下载集群       │
-                    │  100-500 Worker 节点  │
-                    │  每节点 1-10 Gbps     │
+                    │  Distributed Download │
+                    │  100-500 Worker Nodes │
+                    │  1-10 Gbps per node   │
                     └──────────┬───────────┘
                                ▼
                     ┌──────────────────────┐
-                    │  原始视频存储         │
-                    │  对象存储 (S3/MinIO)  │
-                    │  预期: 5-20 PB        │
+                    │  Raw Video Storage    │
+                    │  Object Store (S3)    │
+                    │  Expected: 5-20 PB    │
                     └──────────────────────┘
 ```
 
-**关键需求**:
-- **Speed control**: 自适应速率限制，避免触发平台反爬
-- **Format normalization**: 统一转码为 H.264/H.265, 标准化帧率和分辨率
-- **Resumable downloads**: 断点续传，大文件 (>1GB) 分片下载
-- **Dedup pipeline**: 感知哈希 (pHash) + 内容指纹去重
-- **Legal compliance**: 版权检测 + robots.txt 遵守 + 地域合规
-- **Cost estimation**: 爬取 1 亿视频需要 ~300-500 节点·月，带宽费用 ~$50K-200K/月
+**Key Requirements**:
+- **Speed control**: Adaptive rate limiting to avoid triggering platform anti-scraping
+- **Format normalization**: Unified transcode to H.264/H.265, standardized FPS and resolution
+- **Resumable downloads**: Chunked downloads for large files (>1GB)
+- **Dedup pipeline**: Perceptual hash (pHash) + content fingerprinting
+- **Legal compliance**: Copyright detection + robots.txt adherence + regional compliance
+- **Cost estimation**: Crawling 100M videos requires ~300-500 node·months, bandwidth ~$50K-200K/month
 
-### 2.3 数据存储与格式
+### 2.3 Data Storage & Format
 
-| 层级 | 格式 | 压缩 | 用途 | 预估容量 |
-|------|------|------|------|---------|
-| **原始视频** | MP4/MKV | H.264/H.265 | 永久归档 | 5-20 PB |
-| **预处理帧** | Zarr/NPZ | 无 (快速随机访问) | 训练热数据 | 500 TB - 2 PB |
-| **Latent 缓存** | Safetensors | 无 | VAE 编码后缓存 | 50-200 TB |
-| **标注索引** | Parquet + Lance | Zstd | 快速查询和过滤 | 10-50 TB |
-| **Embedding 索引** | FAISS/Lance | 无 | 相似性搜索和去重 | 5-20 TB |
+| Tier | Format | Compression | Purpose | Estimated Capacity |
+|------|--------|------------|---------|-------------------|
+| **Raw Video** | MP4/MKV | H.264/H.265 | Permanent archive | 5-20 PB |
+| **Preprocessed Frames** | Zarr/NPZ | None (fast random access) | Training hot data | 500 TB – 2 PB |
+| **Latent Cache** | Safetensors | None | VAE-encoded cache | 50-200 TB |
+| **Annotation Index** | Parquet + Lance | Zstd | Fast query and filtering | 10-50 TB |
+| **Embedding Index** | FAISS/Lance | None | Similarity search and dedup | 5-20 TB |
 
-**Zarr 分片策略** (用于训练时的快速随机访问):
+**Zarr Sharding Strategy** (for fast random access during training):
 ```
 data/zarr/
   video/
@@ -107,151 +109,152 @@ data/zarr/
       chunk_0000.zarr   ← 1024 audios per chunk, (T_mel, n_mels) float16
 ```
 
-**优势**: Zarr 支持多线程并行读取、分片式随机访问、与 PyTorch DataLoader 无缝集成，且支持从对象存储直接流式读取。
+**Advantages**: Zarr supports multi-threaded parallel reading, sharded random access, seamless PyTorch DataLoader integration, and direct streaming from object storage.
 
-### 2.4 数据质量体系
+### 2.4 Data Quality System
 
 ```
-原始视频
+Raw Video
   │
-  ├── [1] 技术质量过滤
-  │   ├── 分辨率 ≥ 360p
-  │   ├── 帧率 ≥ 12fps
-  │   ├── 时长 ≥ 3s (排除短视频/表情包)
-  │   ├── 比特率 ≥ 500kbps
-  │   ├── 无损坏帧检测
-  │   └── 非单色/纯色检测
+  ├── [1] Technical Quality Filter
+  │   ├── Resolution ≥ 360p
+  │   ├── FPS ≥ 12fps
+  │   ├── Duration ≥ 3s (exclude shorts/GIFs)
+  │   ├── Bitrate ≥ 500kbps
+  │   ├── No corrupted frame detection
+  │   └── Non-monochrome/solid-color detection
   │
-  ├── [2] 内容质量过滤
-  │   ├── 模糊检测 (Laplacian variance)
-  │   ├── 过曝/欠曝检测
-  │   ├── 剧烈抖动检测 (全局运动估计)
-  │   ├── 场景切换频率合理性
-  │   └── 水印/字幕/Logo 检测
+  ├── [2] Content Quality Filter
+  │   ├── Blur detection (Laplacian variance)
+  │   ├── Overexposure/underexposure detection
+  │   ├── Severe shake detection (global motion estimation)
+  │   ├── Scene cut frequency reasonability
+  │   └── Watermark/subtitle/logo detection
   │
-  ├── [3] 安全过滤
-  │   ├── NSFW 图像检测 (NudeNet/CLIP-based)
-  │   ├── 暴力内容检测
-  │   ├── 儿童保护合规
-  │   └── 版权水印识别
+  ├── [3] Safety Filter
+  │   ├── NSFW image detection (NudeNet/CLIP-based)
+  │   ├── Violent content detection
+  │   ├── Child protection compliance
+  │   └── Copyright watermark identification
   │
-  ├── [4] 多样性分析
-  │   ├── 场景类型分布 (室内/室外/自然/城市…)
-  │   ├── 运动类型分布 (快/慢/静止/交互…)
-  │   ├── 光照条件分布
-  │   └── 文化/地域多样性
+  ├── [4] Diversity Analysis
+  │   ├── Scene type distribution (indoor/outdoor/nature/urban…)
+  │   ├── Motion type distribution (fast/slow/static/interactive…)
+  │   ├── Lighting condition distribution
+  │   └── Cultural/geographic diversity
   │
-  └── [5] 去重
-      ├── 精确去重 (MD5/SHA256)
-      ├── 近似去重 (pHash 汉明距离 ≤ 5)
-      ├── 语义去重 (CLIP embedding 余弦相似度 > 0.98)
-      └── 跨源去重 (同一视频多平台上传)
+  └── [5] Deduplication
+      ├── Exact dedup (MD5/SHA256)
+      ├── Near-dedup (pHash Hamming distance ≤ 5)
+      ├── Semantic dedup (CLIP embedding cosine similarity > 0.98)
+      └── Cross-source dedup (same video uploaded to multiple platforms)
 ```
 
-**质量过滤预估**:
-| 阶段 | 通过率 | 1 亿原始 → |
-|------|--------|-----------|
-| 技术质量 | 85% | 8500 万 |
-| 内容质量 | 60% | 5100 万 |
-| 安全过滤 | 90% | 4590 万 |
-| 去重 | 70% | 3210 万 |
-| **最终可用** | **~32%** | **~3200 万** |
+**Quality Filter Pass Rates**:
+| Stage | Pass Rate | 100M raw → |
+|-------|----------|-----------|
+| Technical quality | 85% | 85M |
+| Content quality | 60% | 51M |
+| Safety filter | 90% | 45.9M |
+| Deduplication | 70% | 32.1M |
+| **Final usable** | **~32%** | **~32M** |
 
 ---
 
-## 3. 标注管线
+## 3. Annotation Pipeline
 
-### 3.1 标注维度全景
+### 3.1 Annotation Dimensions
 
-Seedance 2.5 需要远超 2.0 的标注深度：
+Seedance 2.5 requires far deeper annotation than 2.0:
 
 ```
-视频输入
+Video Input
   │
-  ├── [基础标注] ─────────────────────────────────────
-  │   ├── 短描述 (1-2 句, 人工+自动混合)
-  │   ├── 长描述 (段落级, Video-LLaMA-2/CogVLM2)
-  │   ├── 时间戳描述 (每 2s 一段事件描述)
-  │   └── 多语言描述 (中/英/日/韩 覆盖)
+  ├── [Basic Annotation] ─────────────────────────────────────
+  │   ├── Short caption (1-2 sentences, human+auto hybrid)
+  │   ├── Long caption (paragraph-level, Video-LLaMA-2/CogVLM2)
+  │   ├── Timestamped captions (event descriptions every 2s)
+  │   └── Multi-language captions (EN/ZH/JA/KO coverage)
   │
-  ├── [结构标注] ─────────────────────────────────────
-  │   ├── 场景类型 (100+ 类)
-  │   ├── 镜头类型 (远景/中景/特写/…)
-  │   ├── 相机运动 (静止/平移/变焦/跟拍/…)
-  │   ├── 光照条件 (自然光/室内灯/逆光/…)
-  │   └── 色调/风格 (写实/动画/复古/…)
+  ├── [Structural Annotation] ─────────────────────────────────
+  │   ├── Scene type (100+ classes)
+  │   ├── Shot type (wide/medium/close-up/…)
+  │   ├── Camera motion (static/pan/zoom/tracking/…)
+  │   ├── Lighting condition (natural/indoor/backlit/…)
+  │   └── Color tone/style (realistic/animated/vintage/…)
   │
-  ├── [物理标注] ─────────────────────────────────────
-  │   ├── 物理事件类型 (碰撞/重力/流体/接触/… 8类)
-  │   ├── 对象物理角色 (agent/controlled/passive)
-  │   ├── 运动轨迹 (关键对象 2D 轨迹)
-  │   └── 因果链 (A 推 B → B 碰 C → C 掉落)
+  ├── [Physics Annotation] ────────────────────────────────────
+  │   ├── Physics event type (collision/gravity/fluid/contact/… 8 classes)
+  │   ├── Object physical role (agent/controlled/passive)
+  │   ├── Motion trajectory (key object 2D trajectory)
+  │   └── Causal chain (A pushes B → B hits C → C falls)
   │
-  ├── [人物标注] ─────────────────────────────────────
-  │   ├── 人脸检测 + 身份聚类
-  │   ├── 3D 关键点 (MediaPipe/InsightFace)
-  │   ├── 表情分类 (7 基本表情 + 中性)
-  │   ├── 口型/视位标注 (LipSync 训练数据)
-  │   ├── 身体姿态 (OpenPose/DWPose)
-  │   └── 手势识别
+  ├── [Character Annotation] ──────────────────────────────────
+  │   ├── Face detection + identity clustering
+  │   ├── 3D keypoints (MediaPipe/InsightFace)
+  │   ├── Expression classification (7 basic + neutral)
+  │   ├── Mouth/viseme annotation (LipSync training data)
+  │   ├── Body pose (OpenPose/DWPose)
+  │   └── Gesture recognition
   │
-  ├── [音频标注] ─────────────────────────────────────
-  │   ├── 语音转录 (Whisper large-v3)
-  │   ├── 音频事件分类 (AudioSet 527类)
-  │   ├── 音视频对齐偏移量 (Onset detection)
-  │   ├── 音乐/音效/人声分离 (Demucs/HTDemucs)
-  │   └── 情感/语调 (语音情感识别)
+  ├── [Audio Annotation] ──────────────────────────────────────
+  │   ├── Speech transcription (Whisper large-v3)
+  │   ├── Audio event classification (AudioSet 527 classes)
+  │   ├── AV alignment offset (onset detection)
+  │   ├── Music/SFX/speech separation (Demucs/HTDemucs)
+  │   └── Emotion/tone (speech emotion recognition)
   │
-  ├── [深度标注] ─────────────────────────────────────
-  │   ├── 深度估计 (DepthAnything-V2, 每帧)
-  │   ├── 光流 (RAFT/GMA, 每对相邻帧)
-  │   ├── 语义分割 (SAM-2, 关键帧)
-  │   ├── 实例分割 (物体追踪 ID)
-  │   └── 表面法线估计
+  ├── [Deep Annotation] ───────────────────────────────────────
+  │   ├── Depth estimation (DepthAnything-V2, per-frame)
+  │   ├── Optical flow (RAFT/GMA, per adjacent frame pair)
+  │   ├── Semantic segmentation (SAM-2, keyframes)
+  │   ├── Instance segmentation (object tracking ID)
+  │   └── Surface normal estimation
   │
-  └── [质量评分] ─────────────────────────────────────
-      ├── 视觉质量 (BRISQUE/NIQE/CLIP-IQA)
-      ├── 运动平滑度
-      ├── 构图美学 (AVA 数据集评分)
-      └── 物理合理性 (PhysicsEventDetector)
+  └── [Quality Scoring] ───────────────────────────────────────
+      ├── Visual quality (BRISQUE/NIQE/CLIP-IQA)
+      ├── Motion smoothness
+      ├── Composition aesthetics (AVA dataset scoring)
+      └── Physical plausibility (PhysicsEventDetector)
 ```
 
-### 3.2 标注计算成本
+### 3.2 Annotation Compute Cost
 
-标注是整个管线中计算最密集的环节。以处理 3200 万视频（平均 10 秒）估算：
+Annotation is the most compute-intensive part of the pipeline. Estimated for 32M videos (avg 10s):
 
-| 标注任务 | 模型 | 每视频耗时 | 总 GPU·时 (3200万条) | GPU 需求 |
-|---------|------|-----------|---------------------|---------|
-| **短描述** | BLIP-2 / Video-LLaMA-2 | ~5s | 44,400 h | 10×A100 |
-| **长描述** | CogVLM2-19B | ~15s | 133,200 h | 30×A100 |
-| **深度估计** | DepthAnything-V2 | ~3s/帧, 采样8帧 | 213,300 h | 50×A100 |
-| **光流** | RAFT | ~0.2s/帧对 | 56,800 h | 15×A100 |
-| **语义分割** | SAM-2 | ~1s/关键帧 | 8,900 h | 2×A100 |
-| **人脸+关键点** | InsightFace | ~0.1s/帧 | 28,400 h | 8×A100 |
-| **语音转录** | Whisper large-v3 | ~2s | 17,800 h | 4×A100 |
-| **音频事件** | PANNs/CLAP | ~1s | 8,900 h | 2×A100 |
-| **物理事件** | PhysicsEventDetector (CPU) | ~0.02s | 178 h | CPU 即可 |
-| **质量评分** | BRISQUE+NQI+CLIP | ~3s | 26,700 h | 6×A100 |
-| **安全过滤** | NudeNet+CLIP NSFW | ~1s | 8,900 h | 2×A100 |
-| **总计** | | | **~547,500 GPU·h** | **~130×A100** |
+| Annotation Task | Model | Per-Video Time | Total GPU·h (32M) | GPU Needed |
+|----------------|-------|---------------|-------------------|-----------|
+| **Short caption** | BLIP-2 / Video-LLaMA-2 | ~5s | 44,400 h | 10×A100 |
+| **Long caption** | CogVLM2-19B | ~15s | 133,200 h | 30×A100 |
+| **Depth estimation** | DepthAnything-V2 | ~3s/frame, 8 frames sampled | 213,300 h | 50×A100 |
+| **Optical flow** | RAFT | ~0.2s/frame pair | 56,800 h | 15×A100 |
+| **Segmentation** | SAM-2 | ~1s/keyframe | 8,900 h | 2×A100 |
+| **Face + keypoints** | InsightFace | ~0.1s/frame | 28,400 h | 8×A100 |
+| **Speech transcription** | Whisper large-v3 | ~2s | 17,800 h | 4×A100 |
+| **Audio events** | PANNs/CLAP | ~1s | 8,900 h | 2×A100 |
+| **Physics events** | PhysicsEventDetector (CPU) | ~0.02s | 178 h | CPU only |
+| **Quality scoring** | BRISQUE+NQI+CLIP | ~3s | 26,700 h | 6×A100 |
+| **Safety filter** | NudeNet+CLIP NSFW | ~1s | 8,900 h | 2×A100 |
+| **Total** | | | **~547,500 GPU·h** | **~130×A100** |
 
-以 130 张 A100 持续运行，标注管线需要 **~6 个月**完成全部 3200 万视频的标注。
-使用 H100 可以缩短到 ~3 个月。
+With 130 A100 GPUs running continuously, the annotation pipeline takes **~6 months** to complete all 32M videos. Using H100 reduces this to ~3 months.
 
-### 3.3 标注管线架构
+### 3.3 Annotation Pipeline Architecture
 
 ```
                          ┌──────────────────────┐
-                         │   标注调度器 (Argo)   │
-                         │   DAG: 依赖管理       │
-                         │   优先级队列          │
+                         │  Annotation Scheduler │
+                         │  (Argo)              │
+                         │  DAG: dependency mgmt │
+                         │  Priority queue       │
                          └──────────┬───────────┘
                                     │
           ┌─────────────┬───────────┼───────────┬─────────────┐
           ▼             ▼           ▼           ▼             ▼
     ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
     │Stage 1   │ │Stage 2   │ │Stage 3   │ │Stage 4   │ │Stage 5   │
-    │技术过滤   │ │内容标注   │ │深度标注   │ │人物标注   │ │质量评分   │
+    │Tech      │ │Content   │ │Deep      │ │Character │ │Quality   │
+    │Filter    │ │Annotate  │ │Annotate  │ │Annotate  │ │Score     │
     │          │ │          │ │          │ │          │ │          │
     │CPU Worker│ │GPU Worker│ │GPU Worker│ │GPU Worker│ │GPU Worker│
     │100×      │ │30×A100   │ │50×A100   │ │10×A100   │ │10×A100   │
@@ -259,93 +262,93 @@ Seedance 2.5 需要远超 2.0 的标注深度：
                                     │
                                     ▼
                          ┌──────────────────────┐
-                         │   标注数据库          │
-                         │   Lance/Parquet       │
-                         │   版本化 Schema        │
-                         │   支持增量更新         │
+                         │  Annotation Database  │
+                         │  Lance/Parquet        │
+                         │  Versioned Schema     │
+                         │  Incremental updates  │
                          └──────────────────────┘
 ```
 
-**关键设计**:
-- **DAG 调度**: Stage 1 的输出触发 Stage 2-5（可并行）
-- **增量处理**: 新数据自动触发标注，不用全量重跑
-- **Schema 版本化**: 标注维度增加时向后兼容
-- **质量抽检**: 1% 人工审核 + 自动标注置信度阈值
+**Key Design Points**:
+- **DAG scheduling**: Stage 1 output triggers Stage 2-5 (parallelizable)
+- **Incremental processing**: New data auto-triggers annotation, no full re-runs
+- **Schema versioning**: Backward compatible when annotation dimensions increase
+- **Quality spot-checking**: 1% human review + auto-annotation confidence thresholds
 
 ---
 
-## 4. 预训练
+## 4. Pre-Training
 
-### 4.1 训练规模估算
+### 4.1 Training Scale Estimation
 
-从 1.6B dense 升级到 200B MoE 的规模跃迁：
+The scale jump from 1.6B dense to 200B MoE:
 
-| 参数 | 1.6B Base (当前) | 30B Dense | 200B MoE (2.5 目标) |
-|------|-----------------|-----------|---------------------|
+| Parameter | 1.6B Base (Current) | 30B Dense | 200B MoE (2.5 Target) |
+|-----------|--------------------|-----------|----------------------|
 | dim | 1024 | 2048 | 4096 |
 | num_layers | 24 | 48 | 48-72 |
 | num_heads | 16 | 32 | 32-48 |
-| 总参数 | 1.6B | 30.6B | ~200B |
-| 激活参数 | 1.6B (100%) | 30.6B (100%) | ~36B (18%) |
-| 每步显存 (bf16) | ~20 GB | ~130 GB | ~500 GB |
-| 最小 GPU | 1×A100 40GB | 4×A100 80GB | 8×H100 80GB |
-| 推荐 GPU | 8×A100 80GB | 8×H100 80GB | 32×H100 80GB |
-| 每 GPU 批次 | 8 | 4 | 1 |
-| 梯度累积 | 2 | 8 | 64 |
-| 有效批次 | 128 | 128 | 512 |
-| 训练步数 | 500K | 500K | 1M |
-| 总 token 数 | ~1.6T | ~6.4T | ~256T |
-| **GPU·时** | **~11,000** | **~55,000** | **~3,000,000** |
+| Total params | 1.6B | 30.6B | ~200B |
+| Activated params | 1.6B (100%) | 30.6B (100%) | ~36B (18%) |
+| Per-step VRAM (bf16) | ~20 GB | ~130 GB | ~500 GB |
+| Minimum GPU | 1×A100 40GB | 4×A100 80GB | 8×H100 80GB |
+| Recommended GPU | 8×A100 80GB | 8×H100 80GB | 32×H100 80GB |
+| Batch per GPU | 8 | 4 | 1 |
+| Gradient accumulation | 2 | 8 | 64 |
+| Effective batch | 128 | 128 | 512 |
+| Training steps | 500K | 500K | 1M |
+| Total tokens | ~1.6T | ~6.4T | ~256T |
+| **GPU·hours** | **~11,000** | **~55,000** | **~3,000,000** |
 
-200B MoE 的训练需要在 32×H100 集群上运行 **~4 个月**（假设 80% 利用率）。
+200B MoE training requires a 32×H100 cluster running for **~4 months** (assuming 80% utilization).
 
-### 4.2 分布式训练策略
+### 4.2 Distributed Training Strategy
 
-#### 4.2.1 并行策略组合
+#### 4.2.1 Hybrid Parallelism
 
-对于 200B 级别的模型，单一并行策略不够，需要混合并行：
+For 200B-scale models, a single parallelism strategy is insufficient — hybrid parallelism is required:
 
 ```
-混合并行 (Hybrid Parallelism):
+Hybrid Parallelism:
   ┌─────────────────────────────────────────────────────────────┐
-  │  数据并行 (DP): 8 路 — 跨节点                               │
-  │  完全分片 (FSDP/ZeRO-3): 参数+梯度+优化器状态分片            │
-  │  张量并行 (TP): 2 路 — 单节点内 NVLink                     │
-  │  流水线并行 (PP): 4 路 — 层间流水线                         │
-  │  序列并行 (SP): 8 路 — Ulysses 序列并行 (长序列)            │
-  │  专家并行 (EP): 16 路 — MoE 专家分布到多节点                │
+  │  Data Parallel (DP): 4-way — across nodes                   │
+  │  Fully Sharded (FSDP/ZeRO-3): params+grads+optimizer sharded│
+  │  Tensor Parallel (TP): 2-way — within-node NVLink           │
+  │  Pipeline Parallel (PP): 4-way — inter-layer pipelining     │
+  │  Sequence Parallel (SP): 8-way — Ulysses SP (long sequences)│
+  │  Expert Parallel (EP): 16-way — MoE experts across nodes    │
   └─────────────────────────────────────────────────────────────┘
 
-推荐配置: 32×H100 (4 节点 × 8 GPU)
+Recommended config: 32×H100 (4 nodes × 8 GPU)
   DP=4, TP=2, PP=4, EP=16
-  → 每 GPU 约 22B 参数 + 优化器状态 ≈ 60-70 GB
-  → bf16 训练可行，无需 CPU offload
+  → Per GPU ~22B params + optimizer states ≈ 60-70 GB
+  → bf16 training feasible, no CPU offload needed
 ```
 
-#### 4.2.2 通信优化
+#### 4.2.2 Communication Optimization
 
-| 技术 | 用途 | 预期收益 |
-|------|------|---------|
-| **FSDP prefetch** | 预取下一层参数，隐藏通信延迟 | 10-15% 吞吐提升 |
-| **Gradient bucketing** | 合并小梯度张量减少 all-reduce 次数 | 5-10% 通信减少 |
-| **Communication overlap** | 计算和通信重叠执行 | 15-25% 吞吐提升 |
-| **FP8 通信** (H100) | All-reduce 使用 FP8 降低带宽 | 2× 通信带宽 |
-| **SHARP** (InfiniBand) | 网内聚合，减少数据往返 | 30-50% 通信减少 |
-| **NVLink Switch** | 节点内 900 GB/s 全互联 | 节点内 TP 几乎零开销 |
+| Technique | Purpose | Expected Gain |
+|-----------|---------|---------------|
+| **FSDP prefetch** | Preload next layer params, hide communication latency | 10-15% throughput |
+| **Gradient bucketing** | Merge small gradient tensors, reduce all-reduce count | 5-10% comm reduction |
+| **Communication overlap** | Overlap compute and communication | 15-25% throughput |
+| **FP8 communication** (H100) | All-reduce using FP8 reduces bandwidth | 2× comm bandwidth |
+| **SHARP** (InfiniBand) | In-network aggregation, reduce data roundtrips | 30-50% comm reduction |
+| **NVLink Switch** | 900 GB/s full interconnect within node | Near-zero TP overhead |
 
-#### 4.2.3 DeepSpeed 配置演进
+#### 4.2.3 DeepSpeed Configuration Evolution
 
-当前代码已有 DeepSpeed 支持，但需要扩展到 200B 级别：
+Current code has DeepSpeed support but needs extension to 200B scale:
 
 ```python
-# 200B MoE DeepSpeed 配置 (需要新增)
+# 200B MoE DeepSpeed Config (to be added)
 DEEPSPEED_200B_CONFIG = {
     "train_batch_size": 512,
     "gradient_accumulation_steps": 64,
     "bf16": {"enabled": True},
     "zero_optimization": {
         "stage": 3,
-        "stage3_max_live_parameters": 3e9,      # 30 亿活跃参数
+        "stage3_max_live_parameters": 3e9,
         "stage3_max_reuse_distance": 3e9,
         "stage3_prefetch_bucket_size": 5e8,
         "stage3_param_persistence_threshold": 1e6,
@@ -360,255 +363,249 @@ DEEPSPEED_200B_CONFIG = {
             "buffer_size": 1e9,
         },
     },
-    # 专家并行 (DeepSpeed MoE)
     "expert_parallel_size": 16,
     "moe": {
         "ep_size": 16,
         "enable_expert_tensor_parallelism": True,
     },
-    # 序列并行
     "sequence_parallel_enabled": True,
-    "data_efficiency": {
-        "enabled": True,
-        "seed": 42,
-    },
-    # 通信优化
     "communication_data_type": "fp16",
     "prescale_gradients": True,
     "gradient_clipping": 1.0,
 }
 ```
 
-### 4.3 训练稳定性
+### 4.3 Training Stability
 
-大模型训练的稳定性是首要挑战：
+Stability is the primary challenge for large model training:
 
-| 问题 | 现象 | 应对措施 |
-|------|------|---------|
-| **Loss spike** | 损失突然飙升 10-100× | Gradient clipping (1.0), 跳过异常批次, 回滚 checkpoint |
-| **Router collapse** | MoE 路由退化到单个专家 | Load balancing loss, 专家 dropout, 路由器 z-loss |
-| **Activation explosion** | 中间层激活值溢出 | QK norm, AdaLN 归一化, 混合精度 NaN 检测 |
-| **Slow convergence** | 训练损失下降缓慢 | μP (maximal update) 参数化调参, 学习率 warmup |
-| **Dead experts** | 部分专家从未被路由 | 专家重新初始化策略, 负载均衡 warmup |
-| **Gradient noise** | 大 batch 下梯度质量下降 | 梯度累积, 自适应 batch size, LAMB 优化器 |
-| **Checkpoint corruption** | 保存/加载时状态不一致 | Checksum 验证, 原子写入, 备份 checkpoint |
+| Problem | Symptom | Mitigation |
+|---------|---------|------------|
+| **Loss spike** | Loss suddenly spikes 10-100× | Gradient clipping (1.0), skip anomalous batches, rollback checkpoint |
+| **Router collapse** | MoE routing degenerates to single expert | Load balancing loss, expert dropout, router z-loss |
+| **Activation explosion** | Intermediate activations overflow | QK norm, AdaLN normalization, mixed precision NaN detection |
+| **Slow convergence** | Training loss decreases slowly | μP (maximal update) parameterization, LR warmup |
+| **Dead experts** | Some experts never get routed | Expert re-initialization strategy, load balance warmup |
+| **Gradient noise** | Poor gradient quality under large batches | Gradient accumulation, adaptive batch size, LAMB optimizer |
+| **Checkpoint corruption** | State inconsistency on save/load | Checksum verification, atomic writes, backup checkpoint |
 
-### 4.4 多阶段训练课程
+### 4.4 Multi-Stage Training Curriculum
 
-Seedance 2.5 的训练比 2.0 更复杂：
+Seedance 2.5 training is more complex than 2.0:
 
 ```
-Stage 0 — Text Encoder 预热 (可选)
-  ├── 冻结 T5-XXL, 仅训练 cross-attn projection
-  ├── 数据: 100M 图文对
-  └── 步数: 50K
+Stage 0 — Text Encoder Warmup (optional)
+  ├── Freeze T5-XXL, train cross-attn projection only
+  ├── Data: 100M image-text pairs
+  └── Steps: 50K
 
-Stage 1 — 视频预训练 (500K steps)
-  ├── 视觉分支: PixArt-α 初始化 → 训练
-  ├── 音频分支: 冻结
-  ├── CBGA: 冻结
-  ├── 数据: 5 亿+ 通用视频
-  ├── 分辨率: 256×256, 16-32 帧
-  └── 损失: Flow Matching (video only)
+Stage 1 — Video Pretraining (500K steps)
+  ├── Vision branch: PixArt-α init → train
+  ├── Audio branch: frozen
+  ├── CBGA: frozen
+  ├── Data: 500M+ general videos
+  ├── Resolution: 256×256, 16-32 frames
+  └── Loss: Flow Matching (video only)
 
-Stage 2 — 音频预训练 (200K steps)
-  ├── 视觉分支: 冻结
-  ├── 音频分支: 从头训练
-  ├── 数据: 1 亿+ 音频+配对视频
-  └── 损失: Flow Matching (audio only)
+Stage 2 — Audio Pretraining (200K steps)
+  ├── Vision branch: frozen
+  ├── Audio branch: trained from scratch
+  ├── Data: 100M+ audio + paired videos
+  └── Loss: Flow Matching (audio only)
 
-Stage 3 — AV 联合训练 (300K steps)
-  ├── 全模型训练, CBGA 启动
-  ├── 数据: 3000 万 AV 配对
-  ├── 分辨率: 256×256, 16-32 帧
-  └── 损失: Flow Matching + Sync + World Model + VPT
+Stage 3 — AV Joint Training (300K steps)
+  ├── Full model training, CBGA active
+  ├── Data: 30M AV pairs
+  ├── Resolution: 256×256, 16-32 frames
+  └── Loss: Flow Matching + Sync + World Model + VPT
 
-Stage 4 — 物理偏好优化 (100K steps)
-  ├── PhyDPO 训练
-  ├── PhysicsRM 评分 → 偏好对
-  └── 数据: 500 万物理交互视频
+Stage 4 — Physics Preference Optimization (100K steps)
+  ├── PhyDPO training
+  ├── PhysicsRM scoring → preference pairs
+  └── Data: 5M physics interaction videos
 
-Stage 5 — 高分辨率微调 (100K steps)
-  ├── 分辨率: 512×512, 64 帧
-  ├── 渐进式分辨率提升: 256→384→512
-  └── 数据: 100 万高质量高清视频
+Stage 5 — High-Resolution Fine-Tuning (100K steps)
+  ├── Resolution: 512×512, 64 frames
+  ├── Progressive resolution increase: 256→384→512
+  └── Data: 1M high-quality HD videos
 
-Stage 6 — 长序列适应 (50K steps)
-  ├── 帧数: 64→96→128
+Stage 6 — Long-Sequence Adaptation (50K steps)
+  ├── Frames: 64→96→128
   ├── NTK RoPE scaling
-  ├── 稀疏注意力切换
-  └── 数据: 50 万长视频 (≥30s)
+  ├── Sparse attention switch
+  └── Data: 500K long videos (≥30s)
 
-Stage 7 — SFT 监督微调 (50K steps)
-  ├── LFA + KP + 分镜控制
-  ├── 数据: 5-10 万精选分镜级标注
-  └── 高审美过滤
+Stage 7 — SFT Supervised Fine-Tuning (50K steps)
+  ├── LFA + KP + shot control
+  ├── Data: 50-100K curated shot-level annotations
+  └── High aesthetic filter
 
 Stage 8 — RLHF PPO (10K steps)
-  ├── 5 维奖励模型
+  ├── 5-D reward model
   ├── Best-of-N + PPO clip
-  └── 数据: 1 万人工偏好标注
+  └── Data: 10K human preference annotations
 ```
 
-**总训练时间**: Stage 1-6 约 4-5 个月 (32×H100), Stage 7-8 约 2-3 周。
+**Total Training Time**: Stage 1-6 ≈ 4-5 months (32×H100), Stage 7-8 ≈ 2-3 weeks.
 
 ---
 
-## 5. 后训练 (Post-Training)
+## 5. Post-Training
 
-### 5.1 RM 奖励模型训练
+### 5.1 Reward Model Training
 
-**数据需求**: 至少 10,000 条人工偏好标注。每组标注 = 同一 prompt 的 2-4 个生成结果 → 人类按 5 维度打分。
+**Data requirements**: At least 10,000 human preference annotations. Each annotation = 2-4 generations for the same prompt → humans score across 5 dimensions.
 
-| 维度 | 打分标准 | 标注难度 |
-|------|---------|---------|
-| visual_quality | 清晰度、色彩、细节 | 低 |
-| motion_smoothness | 运动流畅度、无抖动 | 中 |
-| character_consistency | 跨帧人物一致性 | 中 |
-| av_sync | 音画同步、口型匹配 | 高 (需专业审查) |
-| prompt_alignment | 语义对齐度 | 低 |
-| **physics_plausibility** (新增) | 运动/碰撞/重力合理性 | 高 (需物理直觉) |
+| Dimension | Scoring Criteria | Annotation Difficulty |
+|-----------|-----------------|----------------------|
+| visual_quality | Sharpness, color, detail | Low |
+| motion_smoothness | Motion fluidity, no jitter | Medium |
+| character_consistency | Cross-frame character identity | Medium |
+| av_sync | Audio-visual sync, lip matching | High (needs expert review) |
+| prompt_alignment | Semantic alignment | Low |
+| **physics_plausibility** (new) | Motion/collision/gravity plausibility | High (needs physics intuition) |
 
-**标注流程**:
+**Annotation Flow**:
 ```
-prompt → 生成 4 candidates
-  → 5 名标注员独立打分 (1-5 Likert)
-  → 计算 Krippendorff's alpha (标注员间一致性)
-  → alpha ≥ 0.7 的样本纳入训练集
-  → alpha < 0.7 的样本提交资深审核员仲裁
+prompt → generate 4 candidates
+  → 5 annotators score independently (1-5 Likert)
+  → Compute Krippendorff's alpha (inter-annotator agreement)
+  → alpha ≥ 0.7 → include in training set
+  → alpha < 0.7 → submit to senior reviewer for arbitration
 ```
 
-**RM 架构增强**:
-- 当前: 共享 3D Conv Backbone → 5 个独立 Head
-- 2.5 升级: 添加 Physics Head（从 PhysicsRM 蒸馏）, 添加 Aesthetic Head（AVA 数据集预训练）
+**RM Architecture Enhancement**:
+- Current: Shared 3D Conv Backbone → 5 independent heads
+- 2.5 upgrade: Add Physics Head (distilled from PhysicsRM), Add Aesthetic Head (AVA dataset pretrained)
 
-### 5.2 SFT 数据构建
+### 5.2 SFT Data Construction
 
-**分镜级标注** (Shot-level Annotation) 是 SFT 的核心数据需求：
+**Shot-level Annotation** is the core data requirement for SFT:
 
 ```
-一个高质量 SFT 样本:
+A high-quality SFT sample:
 {
-  "video": "shot_#12345.mp4",              # 3-15秒的分镜
-  "prompt": "摄像机从远景缓慢推进到角色面部特写，角色微笑着转向镜头",
-  "shot_type": "dolly_push_in",            # 推轨前推
-  "shot_scale": ["wide", "medium", "close_up"],  # 随时间的景别变化
+  "video": "shot_#12345.mp4",
+  "prompt": "Camera slowly pushes from wide shot to close-up of the character's face, who smiles and turns toward the camera",
+  "shot_type": "dolly_push_in",
+  "shot_scale": ["wide", "medium", "close_up"],
   "camera_motion_path": [
     {"t": 0.0, "pos": [0, 0, 10], "look_at": [0, 1.5, 0]},
     {"t": 1.0, "pos": [0, 0.5, 2], "look_at": [0, 1.5, 0]},
   ],
-  "character_id": "char_A",                # LFA identity anchor
-  "facial_kp_3d": "kp_#12345.npy",        # 逐帧3D关键点 (T, 478, 3)
-  "audio_event": "speech",                 # 说话/环境音/音乐/静音
-  "viseme_sequence": [0, 4, 11, 4, ...],   # 逐帧视位标签
+  "character_id": "char_A",
+  "facial_kp_3d": "kp_#12345.npy",
+  "audio_event": "speech",
+  "viseme_sequence": [0, 4, 11, 4, ...],
   "dialogue_transcript": "I've been waiting for this moment.",
-  "physics_events": ["arm_lift", "head_turn"],  # 物理事件链
+  "physics_events": ["arm_lift", "head_turn"],
   "lighting": "three_point_warm",
   "aesthetic_score": 8.2,
 }
 ```
 
-**数据量级**: 5-10 万条手动标注 + 50-100 万条自动标注（混合策略）。
+**Data volume**: 50-100K manual annotations + 500K-1M auto-annotated (hybrid strategy).
 
-### 5.3 安全对齐
+### 5.3 Safety Alignment
 
-视频生成的安全问题比文本生成更复杂：
+Video generation safety is more complex than text generation:
 
-| 风险类别 | 检测手段 | 缓解措施 |
-|---------|---------|---------|
-| **Deepfake 人脸** | 人脸匹配检测 + 活体检测 | 限制人脸生成范围，添加隐形水印 |
-| **暴力/血腥** | 视频内容安全分类器 | 推理时安全提示注入 + 输出分类器过滤 |
-| **儿童不安全内容** | CSAM 哈希匹配 + 年龄分类器 | 训练数据清洗 + 输出审核 |
-| **版权侵犯** | 输出与训练集相似度检测 | 生成多样性约束 + 版权水印 |
-| **错误信息** | 场景与文本一致性验证 | 合成视频标记 (C2PA 标准) |
+| Risk Category | Detection Method | Mitigation |
+|--------------|-----------------|------------|
+| **Deepfake faces** | Face matching detection + liveness detection | Limit face generation scope, add invisible watermark |
+| **Violence/gore** | Video content safety classifier | Inference-time safety prompt injection + output classifier filtering |
+| **Child-unsafe content** | CSAM hash matching + age classifier | Training data cleaning + output review |
+| **Copyright infringement** | Output vs. training set similarity detection | Generation diversity constraints + copyright watermark |
+| **Misinformation** | Scene-text consistency verification | Synthetic video labeling (C2PA standard) |
 
-**安全对齐的技术路线**:
-1. **训练阶段**: 从训练数据中彻底清除高风险内容
-2. **SFT 阶段**: 添加拒绝样本（"生成一只猫"→正常生成, "生成暴力场景"→安全拒绝）
-3. **RLHF 阶段**: 安全奖励信号（负奖励 = 不安全内容的概率）
-4. **推理阶段**: 输入/输出 双层安全分类器 + 隐形水印 (StegaStamp)
+**Safety alignment technical route**:
+1. **Training phase**: Thoroughly remove high-risk content from training data
+2. **SFT phase**: Add refusal samples ("generate a cat" → normal, "generate violent scene" → safe refusal)
+3. **RLHF phase**: Safety reward signal (negative reward = probability of unsafe content)
+4. **Inference phase**: Input/output dual safety classifier + invisible watermark (StegaStamp)
 
 ---
 
-## 6. 推理部署
+## 6. Inference Deployment
 
-### 6.1 级联推理管线
+### 6.1 Cascaded Inference Pipeline
 
-Seedance 2.5 的推理不能单次完成，需级联：
+Seedance 2.5 inference cannot be done in one shot — requires cascading:
 
 ```
-用户输入: prompt + 参考图/视频 (最多50个)
+User Input: prompt + reference images/video (up to 50)
   │
   ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage A: 文本理解 + 规划                                    │
+│ Stage A: Text Understanding + Planning                      │
 │ T5-XXL encode + VLM prompt decomposition + keyframe planning│
-│ 耗时: ~2-5s, 1×A100                                        │
+│ Time: ~2-5s, 1×A100                                        │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage B: Coarse — 粗结构生成                                │
+│ Stage B: Coarse — Structural Generation                     │
 │ 32fr × 256×256, Flow Matching 30 steps, Euler              │
-│ 耗时: ~15s, 1×A100                                         │
+│ Time: ~15s, 1×A100                                         │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage C: Temporal Extension — 时间扩展                      │
-│ 32fr → 128fr (30s), NTK RoPE + 稀疏注意力, 10 refinement steps│
-│ 耗时: ~30s, 1×A100                                         │
+│ Stage C: Temporal Extension                                 │
+│ 32fr → 128fr (30s), NTK RoPE + sparse attention, 10 steps  │
+│ Time: ~30s, 1×A100                                         │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage D: Spatial SR — 空间超分                              │
-│ 256→512→1024→4K, Cascaded upsampling + 每级 10 refinement │
-│ 耗时: ~90s, 2×A100 (tiled)                                 │
+│ Stage D: Spatial SR — Spatial Super-Resolution              │
+│ 256→512→1024→4K, Cascaded upsampling + 10 steps each       │
+│ Time: ~90s, 2×A100 (tiled)                                 │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage E: Audio Generation — 音频生成                        │
+│ Stage E: Audio Generation                                   │
 │ Audio latent → Flow Matching → AudioVAE decode → waveform  │
-│ 耗时: ~20s, 1×A100                                         │
+│ Time: ~20s, 1×A100                                         │
 └──────────────────────────┬──────────────────────────────────┘
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Stage F: Post-processing — 后处理                           │
-│ Audio-video mux → Color grading → Watermark → Encode (H.265)│
-│ 耗时: ~10s, CPU                                             │
+│ Stage F: Post-processing                                    │
+│ AV mux → Color grading → Watermark → Encode (H.265)        │
+│ Time: ~10s, CPU                                             │
 └─────────────────────────────────────────────────────────────┘
 
-总耗时: ~3 分钟 / 4K 30s 视频 (3-4×A100)
+Total: ~3 min / 4K 30s video (3-4×A100)
 ```
 
-### 6.2 推理优化技术
+### 6.2 Inference Optimization Techniques
 
-| 技术 | 适用阶段 | 加速比 | 实现难度 |
-|------|---------|--------|---------|
-| **TensorRT/ONNX 编译** | DiT backbone | 1.5-2× | 中 |
-| **FP8/INT8 量化** | Attention + FFN | 1.5-2× | 中 |
-| **FlashAttention-3** (H100) | All attention | 1.5-2× | 低 (替换后端) |
-| **vLLM-style PagedAttention** | KV cache 管理 | 1.2× | 高 |
-| **Torch.compile** | 全模型 | 1.3-1.5× | 低 |
-| **Diffusion 蒸馏** (LCM/ADD) | Flow Matching 采样 | 5-10× (4-8 步) | 高 (需额外训练) |
-| **Step distillation** | 30 steps → 4 steps | 7.5× | 高 |
-| **Tiled VAE decoding** | Spatial SR 阶段 | 2-3× (显存) | 低 |
-| **Sparse attention** | Temporal 阶段 | 2-4× (长序列) | 已实现 |
+| Technique | Applicable Stage | Speedup | Difficulty |
+|-----------|-----------------|---------|------------|
+| **TensorRT/ONNX compilation** | DiT backbone | 1.5-2× | Medium |
+| **FP8/INT8 quantization** | Attention + FFN | 1.5-2× | Medium |
+| **FlashAttention-3** (H100) | All attention | 1.5-2× | Low (swap backend) |
+| **vLLM-style PagedAttention** | KV cache management | 1.2× | High |
+| **Torch.compile** | Full model | 1.3-1.5× | Low |
+| **Diffusion distillation** (LCM/ADD) | Flow Matching sampling | 5-10× (4-8 steps) | High (extra training) |
+| **Step distillation** | 30 steps → 4 steps | 7.5× | High |
+| **Tiled VAE decoding** | Spatial SR stage | 2-3× (VRAM) | Low |
+| **Sparse attention** | Temporal stage | 2-4× (long seqs) | Already implemented |
 
-### 6.3 在线服务架构
+### 6.3 Online Service Architecture
 
 ```
                          ┌─────────────┐
-                         │   API 网关   │
-                         │  (速率限制,  │
-                         │   认证, 队列)│
+                         │  API Gateway │
+                         │  (Rate limit,│
+                         │   Auth,      │
+                         │   Queue)     │
                          └──────┬──────┘
                                 │
                     ┌───────────┴───────────┐
                     ▼                       ▼
           ┌──────────────┐         ┌──────────────┐
-          │ 任务调度器    │         │  结果缓存     │
+          │ Task Scheduler│         │  Result Cache │
           │ (Celery/K8s) │◄───────►│  (Redis)      │
-          │ 优先级队列    │         │  相同 prompt   │
-          └──────┬───────┘         │  缓存复用      │
+          │ Priority Queue│         │  Same prompt   │
+          └──────┬───────┘         │  cache reuse   │
                  │                 └──────────────┘
      ┌───────────┼───────────┬──────────────┐
      ▼           ▼           ▼              ▼
@@ -623,88 +620,88 @@ Seedance 2.5 的推理不能单次完成，需级联：
                     │
                     ▼
           ┌──────────────────┐
-          │  对象存储 (S3)    │
-          │  输出视频 + 元数据 │
+          │ Object Store (S3) │
+          │ Output + Metadata │
           └──────────────────┘
 ```
 
-**SLA 目标**: P50 延迟 < 3 分钟, P99 延迟 < 10 分钟, 可用性 99.5%。
+**SLA Targets**: P50 latency < 3 min, P99 latency < 10 min, availability 99.5%.
 
-**弹性伸缩**: 基于 GPU 队列深度自动扩缩容 (KEDA + K8s HPA)。
+**Auto-scaling**: Based on GPU queue depth (KEDA + K8s HPA).
 
-**成本估算** (AWS 按需):
-| 阶段 | GPU 类型 | 数量 | 每小时成本 | 每视频成本 |
-|------|---------|------|-----------|-----------|
+**Cost Estimate** (AWS on-demand):
+| Stage | GPU Type | Count | Hourly Cost | Per-Video Cost |
+|-------|---------|-------|-------------|----------------|
 | B: Coarse | A100 80GB | 1 | $3.06 | $0.08 |
 | C: Temporal | A100 80GB | 1 | $3.06 | $0.15 |
 | D: Spatial SR | A100 80GB | 2 | $6.12 | $0.46 |
 | E+F: Audio+Post | CPU | 4 | $0.40 | $0.02 |
-| **总计** | | | **$12.64/h** | **~$0.71/视频** |
+| **Total** | | | **$12.64/h** | **~$0.71/video** |
 
 ---
 
-## 7. 基础设施 (Infra)
+## 7. Infrastructure
 
-### 7.1 计算集群
+### 7.1 Compute Cluster
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      计算集群拓扑                                │
+│                    Compute Cluster Topology                      │
 │                                                                  │
 │  ┌──────────────────────────┐    ┌──────────────────────────┐   │
-│  │  训练集群 (专用)          │    │  推理集群 (弹性)          │   │
+│  │  Training (Dedicated)    │    │  Inference (Elastic)     │   │
 │  │                          │    │                          │   │
-│  │  32×H100 80GB SXM        │    │  8-32×A100 80GB          │   │
-│  │  4 节点 × 8 GPU          │    │  K8s GPU Pods             │   │
-│  │  NVLink Switch 900GB/s   │    │  自动扩缩                  │   │
-│  │  InfiniBand NDR400       │    │  Spot/按需混合             │   │
-│  │  共享并行文件系统         │    │  模型热加载                │   │
+│  │  32×H100 80GB SXM        │    │  8-32×A100 80GB         │   │
+│  │  4 nodes × 8 GPU         │    │  K8s GPU Pods            │   │
+│  │  NVLink Switch 900GB/s   │    │  Auto-scaling            │   │
+│  │  InfiniBand NDR400       │    │  Spot/on-demand mix      │   │
+│  │  Shared parallel FS      │    │  Hot model loading       │   │
 │  └──────────────────────────┘    └──────────────────────────┘   │
 │                                                                  │
 │  ┌──────────────────────────┐    ┌──────────────────────────┐   │
-│  │  标注集群 (弹性和专用混合) │    │  存储集群                 │   │
+│  │  Annotation (Elastic)    │    │  Storage Cluster         │   │
 │  │                          │    │                          │   │
 │  │  50-130×A100 80GB        │    │  WekaFS / Lustre         │   │
-│  │  GPU 分时复用             │    │  训练数据: 1-2 PB NVMe   │   │
-│  │  CPU spot 实例 (过滤)     │    │  归档数据: 10-20 PB HDD  │   │
-│  │                          │    │  对象存储: S3 兼容       │   │
+│  │  GPU time-sharing        │    │  Training: 1-2 PB NVMe   │   │
+│  │  CPU spot (filtering)    │    │  Archive: 10-20 PB HDD   │   │
+│  │                          │    │  Object store: S3 compat │   │
 │  └──────────────────────────┘    └──────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 7.2 存储架构
+### 7.2 Storage Architecture
 
-| 层级 | 技术选型 | 容量 | IOPS/吞吐 | 用途 |
-|------|---------|------|----------|------|
-| **热存储** (NVMe) | WekaFS / DDN A³I | 500 TB - 1 PB | 100+ GB/s 读 | 训练数据、checkpoint |
-| **温存储** (SSD) | MinIO / Ceph | 2-5 PB | 20 GB/s | 中间结果、标注缓存 |
-| **冷存储** (HDD) | MinIO / 磁带 | 10-20 PB | 5 GB/s | 原始视频归档 |
-| **元数据** | PostgreSQL + Redis | 100 GB | - | 数据索引、训练元数据 |
+| Tier | Technology | Capacity | IOPS/Throughput | Purpose |
+|------|-----------|----------|-----------------|---------|
+| **Hot** (NVMe) | WekaFS / DDN A³I | 500 TB – 1 PB | 100+ GB/s read | Training data, checkpoints |
+| **Warm** (SSD) | MinIO / Ceph | 2-5 PB | 20 GB/s | Intermediate results, annotation cache |
+| **Cold** (HDD) | MinIO / Tape | 10-20 PB | 5 GB/s | Raw video archive |
+| **Metadata** | PostgreSQL + Redis | 100 GB | — | Data index, training metadata |
 
-### 7.3 网络拓扑
+### 7.3 Network Topology
 
 ```
-训练节点 (4× H100 节点)
-  ├── 节点内: NVLink Switch 900 GB/s (GPU-GPU)
-  ├── 节点间: InfiniBand NDR400 400 Gbps (RDMA)
-  │   └── Fat-tree topology, 无超额订阅
-  └── 存储: 4× 200 Gbps 存储网络
+Training Nodes (4× H100 nodes)
+  ├── Intra-node: NVLink Switch 900 GB/s (GPU-GPU)
+  ├── Inter-node: InfiniBand NDR400 400 Gbps (RDMA)
+  │   └── Fat-tree topology, no oversubscription
+  └── Storage: 4× 200 Gbps storage network
 
-推理节点 (8× A100 节点)
-  ├── 节点内: NVLink 600 GB/s
-  ├── 节点间: 100 Gbps RoCE
-  └── 存储: 2× 100 Gbps
+Inference Nodes (8× A100 nodes)
+  ├── Intra-node: NVLink 600 GB/s
+  ├── Inter-node: 100 Gbps RoCE
+  └── Storage: 2× 100 Gbps
 
-标注节点
-  ├── GPU 节点: 25 Gbps
-  └── CPU 节点: 10 Gbps
+Annotation Nodes
+  ├── GPU nodes: 25 Gbps
+  └── CPU nodes: 10 Gbps
 ```
 
-### 7.4 监控与可观测性
+### 7.4 Monitoring & Observability
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     监控栈                                  │
+│                  Monitoring Stack                            │
 │                                                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
 │  │ Metrics      │  │ Logging      │  │ Tracing             │  │
@@ -714,154 +711,154 @@ Seedance 2.5 的推理不能单次完成，需级联：
 │         │                 │                     │             │
 │         ▼                 ▼                     ▼             │
 │  ┌─────────────────────────────────────────────────────────┐ │
-│  │ 关键指标:                                                │ │
-│  │ GPU 利用率, MFU (Model FLOPs Utilization)                 │ │
-│  │ 通信带宽利用率, All-reduce 延迟                           │ │
+│  │ Key Metrics:                                             │ │
+│  │ GPU utilization, MFU (Model FLOPs Utilization)            │ │
+│  │ Communication bandwidth utilization, All-reduce latency   │ │
 │  │ Loss / Gradient Norm / LR                                │ │
-│  │ MoE Router 分布 (专家利用率)                              │ │
-│  │ 训练吞吐 (tokens/s, samples/s)                           │ │
-│  │ 存储 IOPS, 网络丢包率                                     │ │
-│  │ 节点温度, 功耗, ECC 错误                                  │ │
+│  │ MoE Router distribution (expert utilization)              │ │
+│  │ Training throughput (tokens/s, samples/s)                │ │
+│  │ Storage IOPS, Network packet loss                         │ │
+│  │ Node temperature, Power draw, ECC errors                  │ │
 │  └─────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**告警规则**:
-- `loss_spike > 3σ` → 自动暂停训练, 回滚 checkpoint, 通知 oncall
-- `gpu_utilization < 70% for 10min` → 数据管线瓶颈告警
-- `mfu < 40%` → 通信或计算效率问题
-- `checkpoint_write_time > 30min` → 存储性能下降
+**Alerting Rules**:
+- `loss_spike > 3σ` → Auto-pause training, rollback checkpoint, notify on-call
+- `gpu_utilization < 70% for 10min` → Data pipeline bottleneck alert
+- `mfu < 40%` → Communication or compute efficiency issue
+- `checkpoint_write_time > 30min` → Storage performance degradation
 
-### 7.5 MLOps 管线
+### 7.5 MLOps Pipeline
 
 ```
-代码仓库 (Git)
+Code Repository (Git)
   │
-  ├── 代码审查 → CI (lint, type-check, unit test)
-  │
-  ▼
-训练任务提交 (CLI / Web UI)
-  ├── 配置验证 (YAML schema)
-  ├── 资源分配 (Slurm / K8s Volcano)
-  ├── 环境构建 (Docker + uv sync)
-  └── 数据就绪检查 (manifest 完整性)
+  ├── Code Review → CI (lint, type-check, unit test)
   │
   ▼
-训练执行
-  ├── 自动混合精度 + FSDP 配置
-  ├── 断点续训 (CrashLoopBackOff with checkpoint)
-  ├── 定期 eval (验证集 loss + 物理一致性 probe)
+Training Job Submission (CLI / Web UI)
+  ├── Config validation (YAML schema)
+  ├── Resource allocation (Slurm / K8s Volcano)
+  ├── Environment build (Docker + uv sync)
+  └── Data readiness check (manifest integrity)
+  │
+  ▼
+Training Execution
+  ├── Auto mixed precision + FSDP config
+  ├── Crash-resume (CrashLoopBackOff with checkpoint)
+  ├── Periodic eval (validation loss + physics consistency probe)
   └── Metrics → MLflow / W&B
   │
   ▼
-模型注册 (MLflow Model Registry)
-  ├── 版本化 + 元数据 (训练配置, 数据版本, 指标)
-  ├── Staging: 自动部署到测试推理环境
-  ├── Production: 人工审批后上线
-  └── A/B 测试: 灰度发布
+Model Registry (MLflow Model Registry)
+  ├── Versioned + metadata (training config, data version, metrics)
+  ├── Staging: auto-deploy to test inference environment
+  ├── Production: manual approval before rollout
+  └── A/B testing: canary deployment
 ```
 
-### 7.6 成本估算
+### 7.6 Cost Estimate
 
-**首年基础设施总成本** (基于云计算 3 年预留实例 + 按需混合):
+**First-Year Total Infrastructure Cost** (cloud 3-year reserved + on-demand mix):
 
-| 类别 | 资源 | 月成本 | 年成本 |
-|------|------|--------|--------|
-| **训练 GPU** | 32×H100 3yr reserved | ~$75,000 | ~$900,000 |
-| **标注 GPU** | 50×A100 spot + reserved | ~$35,000 | ~$420,000 |
-| **推理 GPU** | 8×A100 reserved + burst | ~$12,000 | ~$144,000 |
-| **CPU 节点** | 200 vCPU (标注+推理) | ~$8,000 | ~$96,000 |
-| **热存储** (NVMe) | 500 TB WekaFS | ~$25,000 | ~$300,000 |
-| **温存储** (SSD) | 2 PB MinIO | ~$8,000 | ~$96,000 |
-| **冷存储** (HDD) | 10 PB 对象存储 | ~$15,000 | ~$180,000 |
-| **网络** | InfiniBand + 带宽 | ~$10,000 | ~$120,000 |
-| **人力** | 5-8 人团队 (含标注管理) | ~$80,000 | ~$960,000 |
-| **其他** (软件许可等) | | ~$5,000 | ~$60,000 |
-| **总计** | | **~$273,000/月** | **~$3,276,000/年** |
+| Category | Resources | Monthly Cost | Annual Cost |
+|----------|----------|-------------|-------------|
+| **Training GPU** | 32×H100 3yr reserved | ~$75,000 | ~$900,000 |
+| **Annotation GPU** | 50×A100 spot + reserved | ~$35,000 | ~$420,000 |
+| **Inference GPU** | 8×A100 reserved + burst | ~$12,000 | ~$144,000 |
+| **CPU Nodes** | 200 vCPU (annotation+inference) | ~$8,000 | ~$96,000 |
+| **Hot Storage** (NVMe) | 500 TB WekaFS | ~$25,000 | ~$300,000 |
+| **Warm Storage** (SSD) | 2 PB MinIO | ~$8,000 | ~$96,000 |
+| **Cold Storage** (HDD) | 10 PB object storage | ~$15,000 | ~$180,000 |
+| **Network** | InfiniBand + bandwidth | ~$10,000 | ~$120,000 |
+| **Personnel** | 5-8 people (incl. annotation mgmt) | ~$80,000 | ~$960,000 |
+| **Other** (software licenses, etc.) | | ~$5,000 | ~$60,000 |
+| **Total** | | **~$273,000/mo** | **~$3,276,000/yr** |
 
-> 注: 以上为公有云 (AWS/GCP) 估算。自建数据中心可将硬件成本降低 40-60%，但需额外投入运维人力。
+> Note: Above estimates are for public cloud (AWS/GCP). On-premise data centers can reduce hardware costs by 40-60%, but require additional ops personnel.
 
 ---
 
-## 8. 团队与时间线
+## 8. Team & Timeline
 
-### 8.1 核心团队配置
+### 8.1 Core Team
 
-| 角色 | 人数 | 职责 |
-|------|------|------|
-| **Research Lead** | 1 | 模型架构设计、训练策略决策 |
-| **Data Engineer** | 2 | 爬虫、数据管线、标注管线 |
-| **Training Engineer** | 2 | 分布式训练、FSDP/DeepSpeed、稳定性 |
-| **Infra Engineer** | 2 | GPU 集群、存储、网络、K8s/Slurm |
-| **ML Engineer (Post-training)** | 1 | SFT、RLHF、RM 训练、安全对齐 |
-| **ML Engineer (Inference)** | 1 | 推理优化、级联管线、在线服务 |
-| **Annotation Manager** | 1 | 标注质量控制、众包管理 |
+| Role | Headcount | Responsibilities |
+|------|----------|-----------------|
+| **Research Lead** | 1 | Model architecture design, training strategy decisions |
+| **Data Engineer** | 2 | Crawlers, data pipeline, annotation pipeline |
+| **Training Engineer** | 2 | Distributed training, FSDP/DeepSpeed, stability |
+| **Infra Engineer** | 2 | GPU cluster, storage, networking, K8s/Slurm |
+| **ML Engineer (Post-training)** | 1 | SFT, RLHF, RM training, safety alignment |
+| **ML Engineer (Inference)** | 1 | Inference optimization, cascade pipeline, online serving |
+| **Annotation Manager** | 1 | Annotation quality control, crowdsourcing management |
 | **Total** | **8-10** | |
 
-### 8.2 建议时间线
+### 8.2 Proposed Timeline
 
 ```
-Month 1-2:  基础架构搭建
-  ├── GPU 集群采购/租赁, 网络搭建
-  ├── 存储系统部署和压测
-  ├── 监控系统上线
-  └── CI/CD + MLOps 管线搭建
+Month 1-2:  Infrastructure Setup
+  ├── GPU cluster procurement/rental, network setup
+  ├── Storage system deployment and stress testing
+  ├── Monitoring system rollout
+  └── CI/CD + MLOps pipeline setup
 
-Month 2-4:  数据+标注管线
-  ├── 大规模爬虫开发和部署
-  ├── 训练数据清洗管线
-  ├── 标注集群搭建 (130×A100 for 标注)
-  └── 第一批 1000 万标注完成
+Month 2-4:  Data + Annotation Pipeline
+  ├── Large-scale crawler development and deployment
+  ├── Training data cleaning pipeline
+  ├── Annotation cluster setup (130×A100 for annotation)
+  └── First 10M annotations complete
 
-Month 3-8:  预训练 (4 阶段 × ~1.5 月)
-  ├── Stage 1-2: 视频+音频预训练 → 基线模型
-  ├── Stage 3-4: AV联合+物理DPO → 物理一致模型
-  └── Stage 5-6: 高分辨率+长序列 → 2.5 核心能力
+Month 3-8:  Pre-Training (8 stages × ~0.75 months)
+  ├── Stage 1-2: Video+Audio pretraining → baseline model
+  ├── Stage 3-4: AV joint + Physics DPO → physics-consistent model
+  └── Stage 5-6: High-res + long-sequence → 2.5 core capabilities
 
-Month 7-9:  后训练
-  ├── RM 训练 (人工偏好标注 1 万条, 4 周)
-  ├── SFT 数据构建 (分镜标注 5 万条, 6 周)
-  ├── SFT 微调 (2 周)
-  └── RLHF PPO (2 周)
+Month 7-9:  Post-Training
+  ├── RM training (10K human preference annotations, 4 weeks)
+  ├── SFT data construction (50K shot annotations, 6 weeks)
+  ├── SFT fine-tuning (2 weeks)
+  └── RLHF PPO (2 weeks)
 
-Month 9-10: 推理管线 + 安全对齐
-  ├── 推理优化 (TensorRT, 量化, 蒸馏)
-  ├── 在线服务部署 (K8s)
-  ├── 安全对齐测试
-  └── 内部灰度测试
+Month 9-10: Inference Pipeline + Safety Alignment
+  ├── Inference optimization (TensorRT, quantization, distillation)
+  ├── Online service deployment (K8s)
+  ├── Safety alignment testing
+  └── Internal beta testing
 
-Month 10-12: 打磨 + 发布
-  ├── 修复反馈问题
-  ├── 性能优化
-  ├── 文档 + 使用指南
-  └── 公开发布 / 内测
+Month 10-12: Polish + Release
+  ├── Fix feedback issues
+  ├── Performance optimization
+  ├── Documentation + usage guides
+  └── Public release / closed beta
 ```
 
 ---
 
-## 9. 关键技术风险
+## 9. Key Technical Risks
 
-| 风险 | 概率 | 影响 | 缓解措施 |
-|------|------|------|---------|
-| **MoE 训练不稳定** | 中 | 高 | 小规模消融实验 (8B MoE→30B→200B), μP 调参 |
-| **200B 训练中途发散** | 中 | 高 | 频繁 checkpoint (每 500 steps), 自动回滚 |
-| **数据版权诉讼** | 中 | 极高 | 法律审核训练数据来源, 仅使用明确授权数据 |
-| **推理成本过高** | 高 | 中 | 模型蒸馏 (200B→7B student), 4-step 采样 |
-| **物理一致性不够好** | 中 | 中 | 增加 PhysicsRM 数据, PhaseLock 默认启用 |
-| **GPU 供应不足** | 高 | 高 | 多云供应商策略, 提前预留, spot 实例互补 |
-| **4K 输出质量不足** | 中 | 中 | 增加 Stage 5 迭代次数, 考虑专用 SR 模型 |
-| **团队招聘困难** | 中 | 高 | 充分内部培训, 采用成熟开源组件降低定制需求 |
+| Risk | Probability | Impact | Mitigation |
+|------|-----------|--------|------------|
+| **MoE training instability** | Medium | High | Small-scale ablation (8B MoE→30B→200B), μP tuning |
+| **200B training divergence mid-run** | Medium | High | Frequent checkpoints (every 500 steps), auto-rollback |
+| **Data copyright litigation** | Medium | Extreme | Legal review of training data sources, use only clearly licensed data |
+| **Inference cost too high** | High | Medium | Model distillation (200B→7B student), 4-step sampling |
+| **Insufficient physics consistency** | Medium | Medium | Increase PhysicsRM data, enable PhaseLock by default |
+| **GPU supply shortage** | High | High | Multi-cloud strategy, advance reservation, spot complement |
+| **4K output quality inadequate** | Medium | Medium | Increase Stage 5 iterations, consider dedicated SR model |
+| **Team hiring difficulty** | Medium | High | Internal training, adopt mature open-source components to reduce custom needs |
 
 ---
 
-## 10. 小结
+## 10. Summary
 
-从 Seedance 2.0（概念验证级开源实现）到 Seedance 2.5（生产级 4K 30s 商用系统），核心差距不在于算法思路——当前代码库已经覆盖了主要的技术方向（DB-DiT、CBGA、MoE、Flow Matching、物理探针、级联管线等）。真正的差距在于：
+From Seedance 2.0 (proof-of-concept open-source implementation) to Seedance 2.5 (production-grade 4K 30s commercial system), the core gap is not algorithmic approach — the current codebase already covers the major technical directions (DB-DiT, CBGA, MoE, Flow Matching, physics probes, cascade pipeline, etc.). The real gaps are:
 
-1. **规模**: 数据（265GB → PB 级）、算力（单节点 → 千卡集群）、模型（1.6B → 200B）
-2. **工程化**: 从能跑通到能稳定训练数月不崩溃
-3. **数据质量**: 从公开数据集到精心筛选、多维标注的生产数据
-4. **后训练**: 从无到完整 SFT + RLHF + 安全对齐管线
-5. **基础设施**: 从单机脚本到分布式训练平台 + 推理服务
+1. **Scale**: Data (265 GB → PB-scale), compute (single node → thousand-GPU cluster), model (1.6B → 200B)
+2. **Engineering**: From "it runs" to "it trains stably for months without crashing"
+3. **Data quality**: From public datasets to carefully curated, multi-dimensionally annotated production data
+4. **Post-training**: From none to a complete SFT + RLHF + safety alignment pipeline
+5. **Infrastructure**: From single-machine scripts to a distributed training platform + inference service
 
-参考做法：先跑通 30B MoE 全流程（4×H100, 3 个月），验证所有工程链路，再扩展到 200B。
+Recommended approach: First run through the 30B MoE full pipeline (4×H100, 3 months), validate all engineering links, then scale to 200B.

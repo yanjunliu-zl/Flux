@@ -15,9 +15,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import torch
 
-from seedance.utils.config import load_config
-from seedance.models import VideoVAE, AudioVAE, DBDiT, T5Encoder
-from seedance.pipelines import I2VAPipeline
+from flux.utils.config import load_config
+from flux.models import VideoVAE, AudioVAE, DBDiT, T5Encoder
+from flux.pipelines import I2VAPipeline
 
 
 def main():

@@ -12,14 +12,14 @@
 #
 # Launch:
 #   # 4 GPUs (minimum)
-#   torchrun --nproc_per_node=4 -m seedance.training --config configs/train/stage1_30b.yaml
+#   torchrun --nproc_per_node=4 -m flux.training --config configs/train/stage1_30b.yaml
 #
 #   # 8 GPUs (recommended — larger batch, no OOM risk)
-#   torchrun --nproc_per_node=8 -m seedance.training --config configs/train/stage1_30b.yaml
+#   torchrun --nproc_per_node=8 -m flux.training --config configs/train/stage1_30b.yaml
 # =============================================================================
 
 model:
-  _target_: seedance.models.DBDiT
+  _target_: flux.models.DBDiT
 
   # ── Shared ────────────────────────────────────────────────────────────
   dim: 4096

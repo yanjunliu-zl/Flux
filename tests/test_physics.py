@@ -3,8 +3,8 @@
 import torch
 import pytest
 
-from seedance.models import DBDiT
-from seedance.physics import (
+from flux.models import DBDiT
+from flux.physics import (
     PhaseLockSampler,
     PhysicsProbe,
     PhysicsProbeLoss,
@@ -14,7 +14,7 @@ from seedance.physics import (
     PhyDPOTrainer,
     CausalMotionGuide,
 )
-from seedance.physics.causal_motion import KeyframeSchedule, TrajectoryConstraint
+from flux.physics.causal_motion import KeyframeSchedule, TrajectoryConstraint
 
 
 class TestPhaseLock:

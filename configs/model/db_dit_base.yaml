@@ -2,7 +2,7 @@
 # Requires ~4-8 GPUs for training at 256x256
 
 model:
-  _target_: seedance.models.DBDiT
+  _target_: flux.models.DBDiT
 
   # Shared
   dim: 1024

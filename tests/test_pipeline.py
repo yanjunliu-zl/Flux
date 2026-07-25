@@ -3,7 +3,7 @@
 import torch
 import pytest
 
-from seedance.models import DBDiT, VideoVAE, AudioVAE, T5Encoder
+from flux.models import DBDiT, VideoVAE, AudioVAE, T5Encoder
 
 
 class TestInferencePipeline:
@@ -51,7 +51,7 @@ class TestInferencePipeline:
         self, small_model, small_vae_video, small_vae_audio, device, dtype
     ):
         """Test that T2VA pipeline can be created without error."""
-        from seedance.pipelines import T2VAPipeline
+        from flux.pipelines import T2VAPipeline
 
         # Skip T5 loading (requires network) — use None for text encoder
         class DummyTextEncoder:

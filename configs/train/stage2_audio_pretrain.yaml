@@ -19,7 +19,7 @@ training:
     audio_latent_channels: 8
 
   data:
-    _target_: seedance.data.AudioDataset
+    _target_: flux.data.AudioDataset
     manifest_path: "data/manifests/audio_train.csv"
     sample_rate: 16000
     n_mels: 80

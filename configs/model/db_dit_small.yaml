@@ -2,7 +2,7 @@
 # Trainable on a single 24GB GPU with gradient checkpointing
 
 model:
-  _target_: seedance.models.DBDiT
+  _target_: flux.models.DBDiT
 
   # Shared
   dim: 768
