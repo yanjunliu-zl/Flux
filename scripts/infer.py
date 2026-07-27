@@ -14,8 +14,8 @@ import torch.nn as nn
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
-from seedance.models.db_dit import DBDiT
-from seedance.pipelines.pipeline_t2va import T2VAPipeline
+from flux.models.db_dit import DBDiT
+from flux.pipelines.pipeline_t2va import T2VAPipeline
 
 
 class FakeVAE(nn.Module):
@@ -69,7 +69,7 @@ class FakeT5(nn.Module):
 
 def load_real_t5(device, model_name: str = "t5-base"):
     """Load real T5 from HuggingFace (already cached from training)."""
-    from seedance.models.text_encoder.t5_encoder import T5Encoder
+    from flux.models.text_encoder.t5_encoder import T5Encoder
     t5 = T5Encoder(model_name=model_name, max_length=77, device=str(device))
     print(f"  [T5] Loaded: {model_name}")
     return t5
