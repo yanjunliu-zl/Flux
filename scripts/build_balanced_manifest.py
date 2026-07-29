@@ -309,7 +309,7 @@ def build_manifest(
     # ═════════════════════════════════════════════════════════════════
     # 6b. YOUTUBE PEOPLE (downloaded + VLM captioned)
     # ═════════════════════════════════════════════════════════════════
-    yt_dirs = [DATA_DIR / "people_youtube_filtered", DATA_DIR / "people_youtube"]
+    yt_dirs = [DATA_DIR / "people_youtube_filtered"]  # only quality-filtered
     yt_added = 0
     for yd in yt_dirs:
         if yd.exists():
