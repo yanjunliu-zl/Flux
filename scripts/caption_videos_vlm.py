@@ -134,8 +134,9 @@ def main():
         args.model,
         torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
         device_map="auto",
+        local_files_only=True,
     )
-    processor = AutoProcessor.from_pretrained(args.model)
+    processor = AutoProcessor.from_pretrained(args.model, local_files_only=True)
     print(f"[Model] Loaded, device: {model.device}")
 
     # Load existing captions

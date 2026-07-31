@@ -298,7 +298,12 @@ def build_manifest(
     # ═════════════════════════════════════════════════════════════════
     # 6. BILIBILI PEOPLE
     # ═════════════════════════════════════════════════════════════════
-    bili_dirs = [DATA_DIR / "people_bilibili_filtered", DATA_DIR / "people_bilibili"]
+    bili_dirs = [
+        DATA_DIR / "people_bilibili2_filtered",
+        DATA_DIR / "people_bilibili_filtered",
+        DATA_DIR / "people_bilibili2",
+        DATA_DIR / "people_bilibili",
+    ]
     for bd in bili_dirs:
         if bd.exists():
             vids = scan_video_dir(bd)
