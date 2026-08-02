@@ -735,29 +735,154 @@ Layer 5 — Inference Layer (Inference-time)
 
 ## 7. Data Pipeline
 
-### 7.1 Datasets
+### 7.1 Data Engineering Philosophy
 
-| Dataset | Videos | Size | Description |
-|---------|--------|------|-------------|
-| VoxCeleb2 | 1,092,009 | 254 GB | Talking faces, 5,994 speakers, 224×224 |
-| WebVid/Pexels | 2,865 / 786 | ~5 GB | General web videos + stock footage |
-| HDTF | 372 | 5.8 GB | High-res talking faces |
-| **Total** | **1,093,167** | **~265 GB** | |
+The data pipeline is designed to produce a **balanced, caption-rich** training set
+with diverse human scenes. Early experiments showed that VoxCeleb2-dominated
+manifests (99.75% talking faces) caused the model to collapse to "blurry face
+talking" and plateau at video_loss ≈ 0.011. The current pipeline fixes this by:
 
-### 7.2 Data Processing Flow
+1. **Multi-source aggregation** — 8 distinct data sources with controlled proportions
+2. **VLM captioning** — Qwen2-VL-2B replaces template captions with real descriptions
+3. **Motion augmentation** — Static images (CelebA-HQ) get synthetic camera motion
+4. **Quality filtering** — Optical flow + resolution + duration gates per video
+5. **Declarative manifest builder** — Single script assembles and balances all sources
+
+### 7.2 Training Data Composition
+
+Current Stage 1 training set: **76k videos, ~850 hours, 22k unique captions**.
+
+| Data Source | Videos | % | Resolution | Caption Source | Download Tool |
+|-------------|--------|---|-----------|----------------|---------------|
+| **CelebA-HQ** | 28,560 | 37.5% | 256×256 | Original (8.4k unique) | `scripts/extract_celeba_hq.py` |
+| **VoxCeleb2** | 14,220 | 18.7% | 224×224 | 10 diverse templates | `download_voxceleb.py` |
+| **YouTube** | 13,098 | 17.2% | 640×360+ | **Qwen2-VL-2B** | `scrapers/youtube_scraper.py` |
+| **Bilibili** | 11,540 | 15.5% | 720×1280 | **Qwen2-VL-2B** | `scrapers/bilibili_download.py` |
+| **WebVid** | 7,593 | 10.0% | 596×336 | Shutterstock captions | `download_webvid.py` |
+| **Animation** | 1,581 | 2.1% | mixed | Templates | `scrapers/bilibili_download.py` |
+| **Pexels** | ~800 | 1.0% | 1080p-4K | **Qwen2-VL-2B** | `download_pexels.py` |
+| **HDTF** | 330 | 0.4% | 360×640 | Original | `download_hdtf.py` |
+
+> **Caption quality matters.** Template captions ("A person speaking") don't teach
+> text-to-content mapping. Real VLM captions ("A young woman with long brown hair
+> smiling at the camera in soft window light, medium close-up portrait") do.
+> ~30% of training data has VLM-generated captions via Qwen2-VL-2B.
+
+### 7.3 Data Processing Pipeline
 
 ```
-Raw Video → scene_detection → quality_filter → video_caption → merged manifest.csv
-                │                    │                │
-           PySceneDetect      BRISQUE/clarity   BLIP-2/VideoLLaMA
-           (scene splitting)  (quality filter)  (auto-captioning)
+┌──────────────────────────────────────────────────────────────────────┐
+│                         DATA PIPELINE                                │
+│                                                                      │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐          │
+│  │ Download │──▶│ Quality  │──▶│  VLM     │──▶│  Build   │──▶ train │
+│  │ per src  │   │ Filter   │   │ Caption  │   │ Manifest │          │
+│  └──────────┘   └──────────┘   └──────────┘   └──────────┘          │
+│       │              │               │               │               │
+│  yt-dlp/API    optical flow    Qwen2-VL-2B    build_balanced_       │
+│  Bilibili API  res≥360p        per-video      manifest.py           │
+│  HuggingFace   dur 2-300s      sampling       76k videos            │
+│  Pexels API    flow 0.05-8.0   4 frames       22k captions          │
+└──────────────────────────────────────────────────────────────────────┘
 ```
 
-### 7.3 Data Loaders
+#### Step 1: Download
+
+Each source has a dedicated tool leveraging the most efficient access method:
+
+| Source | Method | Notes |
+|--------|--------|-------|
+| **YouTube** | yt-dlp search (no API key) | ~300 keyword queries across daily life, sports, professions, emotions, locations |
+| **Bilibili** | Bilibili search API | 25 tag groups (5 keywords each) covering portrait, vlog, fashion, food, pets, etc. |
+| **CelebA-HQ** | HuggingFace datasets | `Ryan-sjtu/celebahq-caption`: 30k images + captions in parquet |
+| **WebVid** | WebVid-10M metadata | 49,500 Shutterstock captions cached; ~8k videos downloaded |
+| **Pexels** | Pexels/Pixabay API | Free stock; ~800 high-res videos across 6 categories |
+| **VoxCeleb2** | Official source | 1.09M clips downloaded, 15k used (1.4%) after quality assessment |
+| **HDTF** | YouTube mirror | 372 high-res talking face clips |
+
+#### Step 2: Quality Filter
+
+`flux/tools/quality_filter.py` applies three gates:
+
+| Gate | Threshold | Rejects |
+|------|-----------|---------|
+| Resolution | h ≥ 360px, w ≥ 360px | Thumbnails, low-res proxies |
+| Duration | 2s ≤ dur ≤ 300s | Splash screens, movies, Shorts |
+| Optical flow | 0.05 ≤ flow ≤ 8.0 | Static slideshows, chaotic glitch |
+
+YouTube pass rate: ~75% (mostly optical flow rejects). Bilibili: ~65%.
+
+#### Step 3: VLM Captioning
+
+`scripts/caption_videos_vlm.py` uses **Qwen2-VL-2B** (locally cached):
+
+1. Sample 4 evenly-spaced frames per video, resize to max 448px
+2. Feed to VLM with a structured prompt requesting person/scene description
+3. Each video: ~0.5s inference at 2.0 vids/sec
+4. Output: `data/manifests/vlm_captions.json` (~11k captions)
+5. Auto-resume (`--resume` flag) — skips already-captioned videos
+
+**Caption quality before/after:**
+
+| Before (template) | After (VLM) |
+|---|---|
+| "a young woman walking in a bright room" | "A young woman with long brown hair smiling at the camera in soft natural window light, medium close-up portrait" |
+| "A person sitting in a contemporary setting" | "A young man with short black hair and a beard, wearing a black tank top and blue jeans, sitting in a cafe with a window in the background" |
+
+> **Model choice:** Qwen2-VL-2B-Instruct (~4 GB VRAM, ~2 vids/sec). For higher quality,
+> swap to Qwen2-VL-7B-Instruct (~14 GB). The model is loaded with `local_files_only=True`
+> for offline inference after initial download.
+
+#### Step 4: Build Manifest
+
+`scripts/build_balanced_manifest.py` assembles the final training CSV:
+
+```
+$ python scripts/build_balanced_manifest.py --vox_count 15000
+
+[Sources scanned]
+  pexels_people, celeba_hq_videos, filtered/*, hdtf/clips,
+  animation_bilibili_filtered, animation_filtered,
+  people_bilibili_filtered, people_youtube_filtered,
+  webvid_filtered, pexels_animals/city/food/nature/tech/travel,
+  voxceleb2 (from train_stage1.csv, downsampled to --vox_count)
+
+[Caption priority]
+  1. VLM captions (vlm_captions.json)
+  2. Source captions (captions.json, webvid metadata)
+  3. Diverse templates (14 VoxCeleb2 variants, 10 animation variants)
+
+[Output]
+  train: data/manifests/train_full_train.csv
+  val:   data/manifests/train_full_val.csv
+```
+
+### 7.4 CelebA-HQ Motion Augmentation
+
+30k static face images are converted to 32-frame pseudo-videos via
+`scripts/extract_celeba_hq.py`. Without this, the model learned that
+"videos have no frame-to-frame change" and produced static noise.
+
+**Augmentation per pseudo-video (randomized):**
+
+| Parameter | Range | Simulates |
+|-----------|-------|-----------|
+| Zoom | 0.90-1.12× sinusoidal | Breathing / lean-in |
+| Pan | 6-12% smooth random path | Camera sway |
+| Rotation | ±1-3° drift | Handheld unsteadiness |
+| Brightness | ±2-6% flutter | Exposure variation |
+
+Each pseudo-video gets unique random motion parameters. Frame-to-frame
+pixel difference averages 18-25 (matching real handheld footage).
+
+### 7.5 Data Loaders
 
 **VideoDataset** (`flux/data/video_dataset.py`):
-- Reads CSV Manifest → OpenCV video decode → random clip → data augmentation
-- Supports FPS condition embedding
+- Reads CSV Manifest → OpenCV video decode → random start-frame clip → augmentation
+- Supported transforms: resize, random crop, horizontal flip, color jitter
+- CFG caption dropout: 10% probability (set to empty string)
+- FPS condition embedding support
+- Error recovery: failed loads fall back to random other sample
 
 **AudioDataset** (`flux/data/audio_dataset.py`):
 - Read audio → resample to 16kHz → Mel spectrogram → log compression
@@ -765,14 +890,12 @@ Raw Video → scene_detection → quality_filter → video_caption → merged ma
 **AVDataset** (`flux/data/av_dataset.py`):
 - Joint video+audio loading, supports I2VA first-frame conditioning (30% probability)
 - CFG caption dropout (10% probability)
-- Error recovery: failed samples randomly replaced
 
 **BucketSampler** (`flux/data/bucket_sampler.py`):
-- Group by (resolution, num_frames, aspect_ratio) buckets to reduce padding waste
+- Group by (resolution, num_frames, aspect_ratio) to minimize padding waste
 
 **Collate Functions** (`flux/data/collate.py`):
-- Video batch: stack video + caption list
-- Audio batch: stack mel + caption list
+- Video batch: stack tensors + caption list; Audio batch: stack mel + caption list
 - AV batch: stack video+mel + first-frame mask
 
 ### 7.4 Data Annotation Pipeline
