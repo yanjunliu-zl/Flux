@@ -15,6 +15,7 @@ from flux.training.lr_scheduler import get_lr_scheduler
 from flux.training.ema import EMA
 from flux.training.distributed import is_main_process
 from flux.diffusion.flow_matching import FlowMatching
+from flux.utils.vae_utils import encode_video
 import flux.utils.checkpoint as ckpt_utils
 
 
@@ -55,6 +56,7 @@ class Trainer:
         config: dict,
         device: torch.device,
         text_encoder: nn.Module | None = None,
+        video_vae: nn.Module | None = None,
         val_loader: DataLoader | None = None,
         world_size: int = 1,
         local_rank: int = 0,
@@ -65,6 +67,7 @@ class Trainer:
         self.config = config
         self.device = device
         self.text_encoder = text_encoder
+        self.video_vae = video_vae
         self.world_size = world_size
         self.local_rank = local_rank
 
@@ -141,6 +144,13 @@ class Trainer:
 
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
+        if is_main_process():
+            vae_status = "VideoVAE" if self.video_vae is not None else "bilinear fallback"
+            print(f"[Trainer] Video encoding: {vae_status}")
+            if self.video_vae is not None:
+                vae_params = sum(p.numel() for p in self.video_vae.parameters()) / 1e6
+                print(f"[Trainer] VideoVAE: {vae_params:.1f}M params (frozen)")
+
     def train_step(
         self, batch: dict
     ) -> dict[str, float]:
@@ -170,12 +180,6 @@ class Trainer:
                 len(captions), self.model.dim, device=self.device
             )
 
-        # Run video through VideoVAE to get clean latent
-        # (In practice, this is done offline or via a pre-loaded VAE)
-        # Here we assume video is already in latent space, or we use a VAE
-        # For simplicity, treat video as needing VAE encoding
-        # Actual implementation would call self.video_vae.encode(video)
-
         # First frame conditioning
         first_frame_mask = None
         if "first_frame" in batch and batch["first_frame"] is not None:
@@ -184,22 +188,10 @@ class Trainer:
             )
             first_frame_mask[:, :, 0:1, :, :] = 0.0
 
-        # Preprocess: raw pixel video -> "latent-like" for DB-DiT
-        # In production: VideoVAE.encode(video). For now: downscale + pad channels
-        # video: (B, C, T, H, W)  e.g. (4, 3, 32, 256, 256)
-        B, C, T, H, W = video.shape
-        # Merge B and T for 2D interpolation: (B*T, C, H, W)
-        v_flat = video.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
-        v_flat = torch.nn.functional.interpolate(
-            v_flat, size=(H // 8, W // 8), mode='bilinear', antialias=True,
-        )
-        # Restore to (B, C, T, H', W')
-        v_latent = v_flat.reshape(B, T, C, H // 8, W // 8).permute(0, 2, 1, 3, 4)
-        # Pad 3 channels -> 16 channels (VAE latent dim)
-        v_latent = torch.cat([
-            v_latent,
-            torch.zeros(B, 13, T, H // 8, W // 8, device=self.device, dtype=video.dtype),
-        ], dim=1)
+        # Preprocess: raw pixel video -> latent via VideoVAE (or bilinear fallback)
+        # video: (B, C, T, H, W)  e.g. (8, 3, 32, 256, 256)
+        # latent: (B, 16, T, H//8, W//8) with VAE, or (B, 16, T, H//8, W//8) with fallback
+        v_latent = encode_video(self.video_vae, video, use_mean=True)
         a_latent = audio  # AudioVAE.encode(audio) in practice
 
         # Compute flow matching loss

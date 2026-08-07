@@ -30,6 +30,7 @@ from flux.models import DBDiT, T5Encoder
 from flux.data import VideoDataset, AudioDataset, AVDataset
 from flux.data.collate import collate_video_batch, collate_audio_batch, collate_av_batch
 from flux.training import Trainer, setup_distributed, wrap_model
+from flux.utils.vae_utils import build_video_vae
 
 
 def build_dataset(config, stage: int):
@@ -70,6 +71,35 @@ def build_dataset(config, stage: int):
         raise ValueError(f"Unknown training stage: {stage}")
 
     return dataset, collate_fn
+
+
+def build_vae(config, device: torch.device, dtype: torch.dtype):
+    """Build and load VideoVAE from config.
+
+    Config section: training.video_vae
+    Set video_vae.enabled: false to skip VAE and use bilinear fallback.
+    """
+    vae_cfg = config.training.get("video_vae", {})
+    if not vae_cfg.get("enabled", False):
+        print("[Train] VideoVAE disabled, using bilinear fallback")
+        return None
+
+    vae = build_video_vae(
+        latent_channels=vae_cfg.get("latent_channels", 16),
+        base_channels=vae_cfg.get("base_channels", 128),
+        channel_multipliers=vae_cfg.get("channel_multipliers", [1, 2, 4, 4]),
+        spatial_strides=vae_cfg.get("spatial_strides", [1, 2, 2, 2]),
+        temporal_strides=vae_cfg.get("temporal_strides", [1, 1, 1, 1]),
+        num_res_blocks=vae_cfg.get("num_res_blocks", 2),
+        attn_resolutions=vae_cfg.get("attn_resolutions", [16]),
+        norm_groups=vae_cfg.get("norm_groups", 32),
+        kl_weight=vae_cfg.get("kl_weight", 1e-6),
+        pretrained_path=vae_cfg.get("pretrained_path", None),
+        sdxl_vae_model=vae_cfg.get("sdxl_vae_model", "stabilityai/sdxl-vae"),
+        device=device,
+        dtype=dtype,
+    )
+    return vae
 
 
 def build_model(config, stage: int):
@@ -162,6 +192,10 @@ def main():
         print(f"[Warning] T5 encoder not available ({e}), using zero embeddings")
         text_encoder = None
 
+    # Build VideoVAE (if enabled in config)
+    mp_dtype = torch.bfloat16 if config.training.get("mixed_precision", "bf16") == "bf16" else torch.float32
+    video_vae = build_vae(config, device, mp_dtype)
+
     # Create trainer
     trainer = Trainer(
         model=model,
@@ -169,6 +203,7 @@ def main():
         config=dict(config.training),
         device=device,
         text_encoder=text_encoder,
+        video_vae=video_vae,
     )
 
     # Train

@@ -16,13 +16,14 @@ sys.path.insert(0, PROJECT_DIR)
 
 from flux.models.db_dit import DBDiT
 from flux.pipelines.pipeline_t2va import T2VAPipeline
+from flux.utils.vae_utils import build_video_vae
 
 
 class FakeVAE(nn.Module):
-    """Stub VAE that provides required attributes for the pipeline.
+    """Stub VAE for bilinear fallback when no real VideoVAE is available.
 
-    Training doesn't use a real VAE — it does bilinear downscale + zero-padding.
-    The pipeline_t2va handles the reverse transform internally.
+    decode_latent() in vae_utils detects this via _is_fake_vae() and uses
+    bilinear upscale instead of real VAE decode.
     """
     def __init__(self, latent_channels: int, sample_rate: int = 16000):
         super().__init__()
@@ -142,6 +143,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", default="outputs/inference_test.mp4")
     parser.add_argument("--t5_model", default="t5-base")
+    parser.add_argument("--vae_checkpoint", default=None,
+                        help="Path to VideoVAE checkpoint (enables real VAE decode)")
+    parser.add_argument("--vae_temporal_strides", type=int, nargs="+", default=[1, 1, 1, 1],
+                        help="VAE temporal strides (default: 1 1 1 1 = no temporal compression)")
     args = parser.parse_args()
 
     os.makedirs("outputs", exist_ok=True)
@@ -157,8 +162,20 @@ def main():
     print(f"\n[T5] Loading text encoder...")
     text_encoder = load_real_t5(device, args.t5_model)
 
-    # Create fake VAEs (pipeline needs them for shape info)
-    vae_video = FakeVAE(latent_channels=16)
+    # Build VideoVAE (real) or FakeVAE (bilinear fallback)
+    if args.vae_checkpoint:
+        print(f"\n[VAE] Loading VideoVAE from {args.vae_checkpoint}")
+        vae_video = build_video_vae(
+            latent_channels=16,
+            temporal_strides=tuple(args.vae_temporal_strides),
+            pretrained_path=args.vae_checkpoint,
+            device=device,
+            dtype=dtype,
+        )
+    else:
+        print("\n[VAE] No checkpoint provided, using bilinear fallback (FakeVAE)")
+        vae_video = FakeVAE(latent_channels=16)
+
     vae_audio = FakeVAE(latent_channels=8)
 
     # Create pipeline

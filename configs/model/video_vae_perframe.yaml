@@ -1,0 +1,36 @@
+# VideoVAE Configuration — Per-Frame (No Temporal Compression)
+# Uses 2D SDXL VAE weights for spatial compression, applied per-frame.
+# Temporal compression can be enabled later by changing temporal_strides to [2, 2, 1, 1].
+#
+# 8x spatial compression, 1x temporal (per-frame), 16 latent channels.
+# Input: (B, 3, T, H, W) — pixel frames in [-1, 1]
+# Output: (B, 16, T, H/8, W/8) — latent, same T as input
+
+model:
+  _target_: flux.models.VideoVAE
+
+  # Input/Output
+  in_channels: 3
+  latent_channels: 16
+
+  # Channel progression
+  base_channels: 128
+  channel_multipliers: [1, 2, 4, 4]  # 128 -> 256 -> 512 -> 512
+
+  # Spatial compression (cumulative 8x)
+  spatial_strides: [1, 2, 2, 2]
+
+  # Temporal compression — [1, 1, 1, 1] = per-frame, [2, 2, 1, 1] = 4x
+  temporal_strides: [1, 1, 1, 1]
+
+  num_res_blocks: 2
+  attn_resolutions: [16]
+
+  # GroupNorm
+  norm_groups: 32
+
+  # KL regularization (small weight to keep latents close to unit Gaussian)
+  kl_weight: 1.0e-6
+
+  # Initialize from official SDXL VAE (spatial layers only)
+  pretrained_sdxl_vae: "stabilityai/stable-diffusion-xl-base-1.0"

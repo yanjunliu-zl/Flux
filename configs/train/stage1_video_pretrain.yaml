@@ -76,6 +76,22 @@ training:
     logit_normal_mean: 0.0
     logit_normal_std: 1.0
 
+  # VideoVAE: learned spatial compression replacing bilinear downscale + zero-pad
+  # Set enabled: false to use legacy bilinear fallback
+  video_vae:
+    enabled: true
+    latent_channels: 16
+    base_channels: 128
+    channel_multipliers: [1, 2, 4, 4]
+    spatial_strides: [1, 2, 2, 2]
+    temporal_strides: [1, 1, 1, 1]   # [1,1,1,1] = per-frame (no temporal compression)
+    num_res_blocks: 2
+    attn_resolutions: [16]
+    norm_groups: 32
+    kl_weight: 1.0e-6
+    pretrained_path: null              # Set to a .pt file to load pretrained VAE weights
+    sdxl_vae_model: "stabilityai/stable-diffusion-xl-base-1.0"  # Official SDXL VAE
+
   # World model (VideoWorld 2): pure visual self-supervision
   world_model:
     enabled: false            # Future prediction + temporal consistency loss

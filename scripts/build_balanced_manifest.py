@@ -156,6 +156,7 @@ def _general_cap(seed: int) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 def build_manifest(
     vox_count: int = 50000,
+    celeba_count: int = 1500,
     output: str = "data/manifests/train_full.csv",
     val_split: float = 0.05,
     seed: int = 42,
@@ -210,6 +211,7 @@ def build_manifest(
     # 2. CELEBA_HQ
     # ═════════════════════════════════════════════════════════════════
     chq = scan_video_dir(DATA_DIR / "celeba_hq_videos")
+    rng.shuffle(chq)
     # CelebA-HQ manifest has proper captions — load them
     celeba_manifest = DATA_DIR / "manifests" / "celeba_hq_train.csv"
     celeba_caps = {}
@@ -218,7 +220,8 @@ def build_manifest(
             for row in csv.DictReader(f):
                 celeba_caps[Path(row["video_path"]).name] = row["caption_short"]
     n = 0
-    for v in chq:
+    take = min(len(chq), celeba_count)
+    for v in chq[:take]:
         name = v["file_name"]
         if name in already:
             continue
@@ -231,7 +234,7 @@ def build_manifest(
         already.add(name)
         n += 1
     stats["celeba_hq"] = n
-    print(f"[celeba_hq] {n}")
+    print(f"[celeba_hq] {n}/{len(chq)} (limited to {celeba_count})")
 
     # ═════════════════════════════════════════════════════════════════
     # 3. FILTERED/PEOPLE + FILTERED subcategories
@@ -345,42 +348,36 @@ def build_manifest(
     print(f"[pexels_categories] {sum(stats.get(f'pexels_{c}', 0) for c in ['animals','city','food','nature','tech','travel'])}")
 
     # ═════════════════════════════════════════════════════════════════
-    # 9. VOXCELEB2 (downsample from 1.1M — use manifest paths directly)
+    # 9. VOXCELEB2 — scan directory directly (CSV paths don't match)
     # ═════════════════════════════════════════════════════════════════
-    vox_manifest = DATA_DIR / "manifests" / "train_stage1.csv"
     vox_added = 0
-    if vox_manifest.exists():
-        vox_rows = []
-        with open(vox_manifest, newline="", encoding="utf-8") as f:
-            for row in csv.DictReader(f):
-                if row.get("dataset", "") == "voxceleb2":
-                    # Fix path from Windows to local
-                    vp = row["video_path"]
-                    if vp.startswith("D:\\") or vp.startswith("data/"):
-                        pass
-                    vox_rows.append(row)
-        rng.shuffle(vox_rows)
-        take = min(len(vox_rows), vox_count)
-        print(f"[voxceleb2] {len(vox_rows)} candidates, taking {take}...")
-        for i, row in enumerate(vox_rows[:take]):
-            vp = row["video_path"]
-            # Normalize path: strip Windows prefix, ensure local
-            if "voxceleb2" in vp:
-                vp = vp[vp.index("voxceleb2"):]
-            local = PROJECT_DIR / "data" / vp
-            if not local.exists():
-                continue
-            meta = _get_meta(local)
+    vox_dir = DATA_DIR / "voxceleb2"
+    if vox_dir.exists():
+        vox_files = list(vox_dir.rglob("*.mp4"))
+        rng.shuffle(vox_files)
+        take = min(len(vox_files), vox_count)
+        print(f"[voxceleb2] {len(vox_files)} files, taking {take}...")
+        for i, vf in enumerate(vox_files[:take]):
+            meta = _get_meta(vf)
             if not meta:
                 continue
+            # Use full relative path for dedup (filenames like 00001.mp4 repeat)
+            rel = str(vf.relative_to(DATA_DIR))
+            if rel in already:
+                continue
             cs = _vox_cap(i)
-            all_rows.append({**meta, "audio_path": row.get("audio_path", ""),
-                             "speaker_id": row.get("speaker_id", ""),
+            spk = ""
+            parts = vf.parts
+            for p in parts:
+                if p.startswith("id") and len(p) >= 5:
+                    spk = p; break
+            all_rows.append({**meta, "audio_path": "",
+                             "speaker_id": spk,
                              "caption_short": cs, "caption_long": cs,
                              "caption_audio": "", "dataset": "voxceleb2"})
-            already.add(meta["file_name"])
+            already.add(rel)
             vox_added += 1
-            if (vox_added + 1) % 10000 == 0:
+            if (vox_added + 1) % 5000 == 0:
                 print(f"  [{vox_added}/{take}]")
         stats["voxceleb2"] = vox_added
     print(f"[voxceleb2] {vox_added} / {vox_count} target")
@@ -432,11 +429,13 @@ def main():
     parser = argparse.ArgumentParser(description="Build training manifest from all disk data")
     parser.add_argument("--vox_count", type=int, default=50000,
                         help="Max VoxCeleb2 samples (default: 50000)")
+    parser.add_argument("--celeba_count", type=int, default=1500,
+                        help="Max CelebA-HQ samples (default: 1500, set 0 to disable)")
     parser.add_argument("--output", default="data/manifests/train_full.csv")
     parser.add_argument("--val_split", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    build_manifest(args.vox_count, args.output, args.val_split, args.seed)
+    build_manifest(args.vox_count, args.celeba_count, args.output, args.val_split, args.seed)
 
 
 if __name__ == "__main__":
